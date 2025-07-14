@@ -1,0 +1,17 @@
+.{
+    .name = .czui,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.14.1",
+
+    .fingerprint = 0x37973e38250c2bee, // Changing this has security and trust implications.
+
+    .dependencies = .{},
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}
