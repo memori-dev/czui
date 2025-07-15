@@ -74,11 +74,11 @@ fn awaitRead() void {
 
 				// CSI - 'ESC['
 				// FN Key F1 to F4 - 'ESCO'
-				//// len >= 3 && has format of "ESC["
 				if (n-i >= 3 and (buf[i+1] == '[' or buf[i+1] == 'O')) {
-					if (incantations.parse(buf[i..n])) |res| {
+					if (incantations.EscSeq.parse(buf[i..n])) |res| {
 						insert(.{.escSeq = res[0]});
 						if (!incrIfNoOverflow(&i, @truncate(res[1]))) return;
+						continue;
 					} else |err| if (err == incantations.ParseErr.InsufficientLen) break;
 				}
 
@@ -127,11 +127,13 @@ fn awaitRead() void {
 	}
 
 	// update overflow and move overflow bytes to beginning of buf
-	overflow = @as(u7, @intCast(n))-i;
-	@memcpy(buf[0..n-i], buf[i..n]);
+	if (i < n) {
+		overflow = @as(u7, @intCast(n))-i;
+		std.mem.copyForwards(u8, buf[0..n-i], buf[i..n]);		
+	}
 }
 
 pub fn awaitInput() Input {
-	if (len == 0) awaitRead();
+	while (len == 0) awaitRead();
 	return pop();
 }

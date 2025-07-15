@@ -52,6 +52,7 @@ pub const ParseErr = error{
 };
 
 pub const FnKey = enum(u64) {
+	// \x1b4f or "ESCO" is called SS3
 	F1    = 0x1b4f50,
 	F2    = 0x1b4f51,
 	F3    = 0x1b4f52,
@@ -132,18 +133,21 @@ pub const FnKey = enum(u64) {
 };
 
 pub const NavKey = enum(u32) {
+	// TODO move into '~' fn in EscSeq
 	insert     = 0x1b5b327e,
 	delete     = 0x1b5b337e,
 	pageUp     = 0x1b5b357e,
 	pageDown   = 0x1b5b367e,
 
-	arrowUp    = 0x1b5b41,
-	arrowDown  = 0x1b5b42,
-	arrowRight = 0x1b5b43,
-	arrowLeft  = 0x1b5b44,
+	// These have "collisions" with mouseMoveX
+	//arrowUp    = 0x1b5b41,
+	//arrowDown  = 0x1b5b42,
+	//arrowRight = 0x1b5b43,
+	//arrowLeft  = 0x1b5b44,
 
-	end        = 0x1b5b46,
-	home       = 0x1b5b48,
+	// These have "collisions" with moveCursorToStartOfPrevLine & moveCursorAbs
+	//end        = 0x1b5b46,
+	//home       = 0x1b5b48,
 
 	fn parse(bytes: []const u8) ParseErr!struct{@This(), usize} {
 		if (bytes.len < 3) return ParseErr.InsufficientLen;
@@ -163,13 +167,13 @@ pub const NavKey = enum(u32) {
 				};
 			},
 
-			0x41 => return .{.arrowUp,    3},
-			0x42 => return .{.arrowDown,  3},
-			0x43 => return .{.arrowRight, 3},
-			0x44 => return .{.arrowLeft,  3},
+			//0x41 => return .{.arrowUp,    3},
+			//0x42 => return .{.arrowDown,  3},
+			//0x43 => return .{.arrowRight, 3},
+			//0x44 => return .{.arrowLeft,  3},
 
-			0x46 => return .{.end,  3},
-			0x48 => return .{.home, 3},
+			//0x46 => return .{.end,  3},
+			//0x48 => return .{.home, 3},
 
 			else => return ParseErr.NoMatch,
 		}
@@ -301,6 +305,23 @@ const Graphics = struct {
 	bg: ?Color = null,
 };
 
+const IntParserIterator = struct {
+	it: std.mem.SplitIterator(u8, .sequence),
+
+	fn next(self: *@This(), comptime T: type, default: T) T {
+		if (self.it.next()) |str| {
+			if (std.fmt.parseInt(T, str, 10)) |v| return v
+			else |_| return default;
+		}
+
+		return default;
+	}
+
+	fn init(bytes: []const u8) @This() {
+		return .{.it = std.mem.splitSequence(u8, bytes, ";")};
+	}
+};
+
 // So far from testing, if additional args are provided they are dropped
 pub const EscSeq = union(enum) {
 	fnKey: FnKey,
@@ -326,6 +347,8 @@ pub const EscSeq = union(enum) {
 	// E(?x) -> move cursor to start of next line, x (default 1) lines down
 	moveCursorToStartOfNextLine: u16,
 	// F(?x) -> moves cursor to start of prev line, x (default 1) lines up
+	// TODO this and the 'end' key have a collision, but don't do the same thing
+	// TODO im also seeing 'end' being SS3 instead of CSI, but isn't the case when testing
 	moveCursorToStartOfPrevLine: u16,
 
 
@@ -417,7 +440,69 @@ pub const EscSeq = union(enum) {
 
 	unknown: void,
 
+	// TODO
 	mouse: Mouse,
+
+	fn parseFirstInteger(comptime T: type, bytes: []const u8) ?T {
+		var it = std.mem.splitSequence(u8, bytes, ";");
+		const res = std.fmt.parseInt(T, it.first(), 10);
+		if (res) |v| return v
+		else |_| return null;
+	}
+
+	pub fn parse(bytes: []const u8) ParseErr!struct{@This(), usize} {
+		if (bytes.len < 3) return ParseErr.InsufficientLen;
+		if (bytes[0] != ESC) return ParseErr.NoMatch;
+
+		switch (bytes[1]) {
+			// FnKey F1 to F4
+			0x4f => {
+				const fnKey, const len = try FnKey.parse(bytes);
+				return .{.{.fnKey = fnKey}, len};
+			},
+
+			0x5b => {
+				// having one instance of ParseErr.InsufficientLen will coerce to that over no match
+				var encounteredInsufficientLen = false;
+
+				if (FnKey.parse(bytes)) |res| return .{.{.fnKey = res[0]}, res[1]}
+				else |err| if (err == ParseErr.InsufficientLen) encounteredInsufficientLen = true;
+
+				if (NavKey.parse(bytes)) |res| return .{.{.navKey = res[0]}, res[1]}
+				else |err| if (err == ParseErr.InsufficientLen) encounteredInsufficientLen = true;
+
+				for (2..bytes.len) |i| {
+					switch (bytes[i]) {
+						'@' => return .{.{.insertBlankChars = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'L' => return .{.{.insertBlankLines = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'A' => return .{.{.moveCursorUp    = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'B' => return .{.{.moveCursorDown  = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'C' => return .{.{.moveCursorRight = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'D' => return .{.{.moveCursorLeft  = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'E' => return .{.{.moveCursorToStartOfNextLine = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'F' => return .{.{.moveCursorToStartOfPrevLine = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'G' => return .{.{.moveCursorAbsCol = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'd' => return .{.{.moveCursorAbsRow = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						
+						'H', 'f' => {
+							var it = IntParserIterator.init(bytes[2..i]);
+							return .{.{.moveCursorAbs = .{it.next(u16, 1), it.next(u16, 1)}}, i+1};
+						},
+
+						else => {},
+					}
+				}
+
+				if (encounteredInsufficientLen) return ParseErr.InsufficientLen;
+				return ParseErr.NoMatch;
+			},
+
+			else => return ParseErr.NoMatch,
+		}
+	}
 };
 
 // TODO are any optional?
@@ -436,53 +521,146 @@ const Mouse = struct {
 
 // TODO could I make the parsers generative
 
-fn isKnownAnsiEscapeFnChar(byte: u8) bool {
-	return switch (byte) {
-		'A'...'M', 'P'...'T', 'W'...'Z', 'a'...'i', 'l'...'n', 'p'...'z', '@', '^', '`', '{', '}', '|', '~' => true,
-		else => false,
-	};
+const expect = std.testing.expect;
+
+fn intToBytesBigEndian(comptime T: type, val: T) struct{[@sizeOf(@TypeOf(val))]u8, usize} {
+	var out = std.mem.toBytes(std.mem.nativeToBig(T, @as(T, val)));
+	var len: usize = @sizeOf(@TypeOf(val));
+	for (0..out.len) |i| {
+		if (out[0] != 0) break;
+		for (0..out.len-1) |j| out[j] = out[j+1];
+		out[out.len-1-i] = 0;
+		len -= 1;
+	}
+
+	return .{out, len};
 }
 
-pub fn parse(bytes: []const u8) ParseErr!struct{EscSeq, usize} {
-	assert(bytes.len >= 3 and bytes[0] == ESC);
+fn testEnumKeys(comptime Enum: type, comptime tag: std.meta.Tag(EscSeq)) !void {
+	inline for (std.meta.fields(Enum)) |f| {
+		const instance: Enum = @enumFromInt(f.value);
+		const bytes, const enumKeyLen = intToBytesBigEndian(std.meta.Tag(Enum), f.value);
+		
+		const enumOut, const enumOutLen = try Enum.parse(&bytes);
+		try expect(enumOut == instance);
+		try expect(enumKeyLen == enumOutLen);
+		for (1..enumKeyLen-1) |i| try expect(Enum.parse(bytes[0..i]) == ParseErr.InsufficientLen);
 
-	switch (bytes[1]) {
-		// FnKey F1 to F4
-		0x4f => {
-			const fnKey, const len = try FnKey.parse(bytes);
-			return .{.{.fnKey = fnKey}, len};
-		},
-
-		0x5b => {
-			// having one instance of ParseErr.InsufficientLen will coerce to that over no match
-			var encounteredInsufficientLen = false;
-
-			if (FnKey.parse(bytes)) |res| return .{.{.fnKey = res[0]}, res[1]}
-			else |err| if (err == ParseErr.InsufficientLen) encounteredInsufficientLen = true;
-
-			if (NavKey.parse(bytes)) |res| return .{.{.navKey = res[0]}, res[1]}
-			else |err| if (err == ParseErr.InsufficientLen) encounteredInsufficientLen = true;
-
-
-			var i: usize = 2;
-			var found = false;
-			while (i < bytes.len) {
-				if (isKnownAnsiEscapeFnChar(bytes[i])) {
-					found = true;
-					break;
-				}
-
-				i += 1;
-			}
-
-			if (!found) return ParseErr.InsufficientLen;
-
-			stdout.print("'\\0x1b{s}'\n", .{bytes[1..i]}) catch unreachable;
-
-			// TODO parse sequence
-			return ParseErr.InsufficientLen;
-		},
-
-		else => return ParseErr.NoMatch,
+		const escOut, const escOutLen = try EscSeq.parse(&bytes);
+		try expect(std.meta.activeTag(escOut) == tag);
+		try expect(@field(escOut, @tagName(tag)) == instance);
+		try expect(enumKeyLen == escOutLen);
+		for (1..enumKeyLen-1) |i| try expect(EscSeq.parse(bytes[0..i]) == ParseErr.InsufficientLen);
 	}
+}
+
+
+// none should return the default
+fn testEmpty(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime default: T) !void {
+	const in = std.fmt.comptimePrint("\x1b[{c}", .{fnChar});
+	const out, const len = try EscSeq.parse(in);
+	
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(std.mem.eql(u8, &std.mem.toBytes(@field(out, @tagName(tag))), &std.mem.toBytes(default)));
+	try expect(len == in.len);
+}
+
+fn tupleToAnsiEscParamsStr(comptime T: type, comptime tuple: T) [256]u8 {
+	var buf: [256]u8 = undefined;
+	var i: u8 = 1;
+	inline for (tuple) |v| {
+		const out = std.fmt.bufPrint(buf[i..], "{d}", .{v}) catch unreachable;
+		i += @as(u8, @truncate(out.len)) + 1;
+		buf[i-1] = ';';
+	}
+
+	buf[0] = i-1;
+
+	return buf;
+}
+
+// correct should return what was passed in
+fn testCorrect(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime value: T) !void {
+	const in = std.fmt.comptimePrint("\x1b[{any}{c}", .{value, fnChar});
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(@field(out, @tagName(tag)) == value);
+	try expect(len == in.len);
+}
+
+// correct should return what was passed in
+fn testCorrectTuple(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime value: T) !void {
+	const tupleStr = tupleToAnsiEscParamsStr(T, value);
+	var buf: [1024]u8 = undefined;
+	const in = std.fmt.bufPrint(&buf, "\x1b[{s}{c}", .{tupleStr[1..tupleStr[0]], fnChar}) catch unreachable;
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(std.mem.eql(u8, &std.mem.toBytes(@field(out, @tagName(tag))), &std.mem.toBytes(value)));
+	try expect(len == in.len);
+}
+
+// incorrect should return the default
+// underscore is not a fn char and is not numeric
+fn testIncorrect(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime default: T) !void {
+	const in = std.fmt.comptimePrint("\x1b[_{c}", .{fnChar});
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(std.mem.eql(u8, &std.mem.toBytes(@field(out, @tagName(tag))), &std.mem.toBytes(default)));
+	try expect(len == in.len);
+}
+
+// multiple should return the first, from my own testing
+fn testTooMany(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime value: T) !void {
+	const in = std.fmt.comptimePrint("\x1b[{d};{d};{d}{c}", .{value, value +% 1, value -% 1, fnChar});
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(@field(out, @tagName(tag)) == value);
+	try expect(len == in.len);	
+}
+
+// multiple should return the first, from my own testing
+fn testTooManyTuple(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime value: T) !void {
+	const tupleStr = tupleToAnsiEscParamsStr(T, value);
+	var buf: [1024]u8 = undefined;
+	const in = std.fmt.bufPrint(&buf, "\x1b[{s};{d};{d}{c}", .{tupleStr[1..tupleStr[0]], value[0] +% 1, value[0] -% 1, fnChar}) catch unreachable;
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(std.mem.eql(u8, &std.mem.toBytes(@field(out, @tagName(tag))), &std.mem.toBytes(value)));
+	try expect(len == in.len);	
+}
+
+fn testSingleIntEscSeq(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime default: T) !void {
+	try testEmpty(T, tag, fnChar, default);
+	try testCorrect(T, tag, fnChar, 42);
+	try testIncorrect(T, tag, fnChar, default);
+	try testTooMany(T, tag, fnChar, 42);
+}
+
+test "EscSeq" {
+	try testEnumKeys(FnKey, EscSeq.fnKey);
+	try testEnumKeys(NavKey, EscSeq.navKey);
+
+	try testSingleIntEscSeq(u16, EscSeq.insertBlankChars, '@', 1);
+	try testSingleIntEscSeq(u16, EscSeq.insertBlankLines, 'L', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorUp,    'A', 1);
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorDown,  'B', 1);
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorRight, 'C', 1);
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorLeft,  'D', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorToStartOfNextLine, 'E', 1);
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorToStartOfPrevLine, 'F', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorAbsCol, 'G', 1);
+	try testSingleIntEscSeq(u16, EscSeq.moveCursorAbsRow, 'd', 1);
+
+	try testEmpty(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{1,1});
+	try testCorrectTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{24,94});
+	try testIncorrect(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{1,1});
+	try testTooManyTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{24,94});
+	
+	try testEmpty(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{1,1});
+	try testCorrectTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{24,94});
+	try testIncorrect(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{1,1});
+	try testTooManyTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{24,94});
 }
