@@ -182,13 +182,42 @@ pub const NavKey = enum(u32) {
 
 // TODO control keys?
 
+// TODO would the default be that all are false (not including isHigh)?
 const ResetMode = packed struct {
+	isHigh:         bool,
+
 	keyboardAction: bool = false, // 2
 	replace:        bool = false, // 4
 	sendReceive:    bool = false, // 12
 	normalLinefeed: bool = false, // 20
+
+	fn parse(bytes: []const u8) @This() {
+		var out = @This(){.isHigh = bytes[bytes.len-1] == 'h'};
+
+		// the h/l is ignored for proper parsing
+		var it = IntParserIterator.init(bytes[0..bytes.len-1]);
+		while (true) {
+			const val = it.next(u11) catch |err| {
+				switch (err) {
+					error.NoRemaining => break,
+					else => continue,
+				}
+			};
+
+			switch (val) {
+				2    => out.keyboardAction = true,
+				4    => out.replace        = true,
+				12   => out.sendReceive    = true,
+				20   => out.normalLinefeed = true,
+				else => {},
+			}
+		}
+
+		return out;
+	}
 };
 
+// TODO would the default be that all are false (not including isHigh)?
 const PrivateMode = packed struct {
 	isHigh: bool,
 
@@ -220,7 +249,7 @@ const PrivateMode = packed struct {
 	startLoggingOrGraphicPrint: bool = false, // 46 TODO depends
 	alternateScreenBufferOrGraphicRotatedPrint: bool = false, // 47 TODO depends
 	applicationKeypad: bool = false, // 66
-	BackarrowSendsBackspace: bool = false, // 67
+	backarrowSendsBackspace: bool = false, // 67
 	leftAndRightMargin: bool = false, // 69
 	sixelDisplay: bool = false, // 80
 	doNotClearScreenOnDECCOLM: bool = false, // 95
@@ -263,6 +292,99 @@ const PrivateMode = packed struct {
 	bracketedPasteMode: bool = false, // 2004
 	readlineCharQuoting: bool = false, // 2005
 	readlineNewlinePasting: bool = false, // 2006
+
+	fn parse(bytes: []const u8) @This() {
+		assert(bytes[0] == '?');
+		var out = @This(){.isHigh = bytes[bytes.len-1] == 'h'};
+
+		// the ? and h/l are ignored for proper parsing
+		var it = IntParserIterator.init(bytes[1..bytes.len-1]);
+		while (true) {
+			const val = it.next(u11) catch |err| {
+				switch (err) {
+					error.NoRemaining => break,
+					else => continue,
+				}
+			};
+
+			switch (val) {
+				1    => out.applicationCursorKeys = true,
+				2    => out.designateUSASCII = true,
+				3    => out.columnMode132 = true,
+				4    => out.smoothScroll = true,
+				5    => out.reverseVideo = true,
+				6    => out.origin = true,
+				7    => out.autoWrap = true,
+				8    => out.autoRepeat = true,
+				9    => out.sendMouseXYOnBtnPress = true,
+				10   => out.showToolbar = true,
+				12   => out.startBlinkingCursorATT = true,
+				13   => out.startBlinkingCursor = true,
+				14   => out.enableXorBlinkingCursor = true,
+				18   => out.printFormFeed = true,
+				19   => out.setPrintExtentToFullScreen = true,
+				25   => out.showCursor = true,
+				30   => out.showScrollbar = true,
+				35   => out.enableFontShiftingFns = true,
+				38   => out.enterTektronix = true,
+				40   => out.allow80To132 = true,
+				41   => out.moreFix = true,
+				42   => out.enableNationalReplacementCharSets = true,
+				43   => out.enableGraphicExpandedPrint = true,
+				44   => out.marginBellOrGraphicPrintColor = true, // TODO depends
+				45   => out.reverseWraparoundOrGraphicPrintColor = true,
+				46   => out.startLoggingOrGraphicPrint = true, // TODO depends
+				47   => out.alternateScreenBufferOrGraphicRotatedPrint = true, // TODO depends
+				66   => out.applicationKeypad = true,
+				67   => out.backarrowSendsBackspace = true,
+				69   => out.leftAndRightMargin = true,
+				80   => out.sixelDisplay = true,
+				95   => out.doNotClearScreenOnDECCOLM = true,
+				1000 => out.sendMouseXYOnBtnPressAndRelease = true,
+				1001 => out.hiliteMouseTracking = true,
+				1002 => out.cellMotionMouseTracking = true,
+				1003 => out.allMotionMouseTracking = true,
+				1004 => out.sendFocusInFocusOut = true,
+				1005 => out.utf8Mouse = true,
+				1006 => out.sgrMouseMode = true,
+				1007 => out.alternateScroll = true,
+				1010 => out.scrollToBorromOnTTYOutput = true,
+				1011 => out.scrollToBottomOnKeyPress = true,
+				1014 => out.fastScroll = true,
+				1015 => out.urxvtMouse = true,
+				1016 => out.sgrMousePixel = true,
+				1034 => out.interpretMetaKey = true,
+				1035 => out.specialModifiersAltNumlock = true,
+				1036 => out.sendEscOnMetaKeyModifier = true,
+				1037 => out.sendDelFromEditKeypadDel = true,
+				1039 => out.sendEscOnAltKeyModifier = true,
+				1040 => out.keepSelectionIfNotHighlighted = true,
+				1042 => out.urgencyWindowManagerHintOnCtrlG = true,
+				1043 => out.raiseWindowOnCtrlG = true,
+				1044 => out.reuseMostRecentDataFromClipboard = true,
+				1045 => out.extendedReverseWraparound = true,
+				1046 => out.switchingAlternateScreenBuffer = true,
+				1047 => out.alternateScreenBuffer = true,
+				1048 => out.saveCursor = true,
+				1049 => out.saveCursorSwitchClearedAlternateScreenBuffer = true,
+				1050 => out.terminfoTermcapFnKey = true,
+				1051 => out.sunFnKey = true,
+				1052 => out.hpFnKey = true,
+				1053 => out.scoFnKey = true,
+				1060 => out.legacyKeyboardEmulation = true,
+				1061 => out.vt220KeyboardEmulation = true,
+				2001 => out.readlineMouseBtn1 = true,
+				2002 => out.readlineMouseBtn2 = true,
+				2003 => out.readlineMouseBtn3 = true,
+				2004 => out.bracketedPasteMode = true,
+				2005 => out.readlineCharQuoting = true,
+				2006 => out.readlineNewlinePasting = true,
+				else => {},
+			}
+		}
+
+		return out;
+	}
 };
 
 const RGB = struct {u8, u8, u8};
@@ -308,7 +430,12 @@ const Graphics = struct {
 const IntParserIterator = struct {
 	it: std.mem.SplitIterator(u8, .sequence),
 
-	fn next(self: *@This(), comptime T: type, default: T) T {
+	fn next(self: *@This(), comptime T: type) !T {
+		if (self.it.next()) |str| return std.fmt.parseInt(T, str, 10);
+		return error.NoRemaining;
+	}
+
+	fn nextOrElse(self: *@This(), comptime T: type, default: T) T {
 		if (self.it.next()) |str| {
 			if (std.fmt.parseInt(T, str, 10)) |v| return v
 			else |_| return default;
@@ -489,7 +616,29 @@ pub const EscSeq = union(enum) {
 						
 						'H', 'f' => {
 							var it = IntParserIterator.init(bytes[2..i]);
-							return .{.{.moveCursorAbs = .{it.next(u16, 1), it.next(u16, 1)}}, i+1};
+							return .{.{.moveCursorAbs = .{it.nextOrElse(u16, 1), it.nextOrElse(u16, 1)}}, i+1};
+						},
+
+						'I' => return .{.{.cursorForwardTabulation =  parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'Z' => return .{.{.cursorBackwardTabulation = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'J' => return .{.{.eraseDisplay = parseFirstInteger(u2,  bytes[2..i]) orelse 1}, i+1},
+						'K' => return .{.{.eraseLine    = parseFirstInteger(u2,  bytes[2..i]) orelse 1}, i+1},
+						'X' => return .{.{.eraseChars   = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'M' => return .{.{.deleteLines = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'P' => return .{.{.deleteChars = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						
+						'S' => return .{.{.scrollUp   = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'T' => return .{.{.scrollDown = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'b' => return .{.{.repeatPreceedingChar = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+
+						'h', 'l' => return switch (bytes[2]) {
+							// TODO not currently handling screenMode
+							'='  => .{.{.unknown = {}}, i+1},
+							'?'  => .{.{.privateMode = PrivateMode.parse(bytes[2..i])}, i+1},
+							else => .{.{.resetMode = ResetMode.parse(bytes[2..i])}, i+1},
 						},
 
 						else => {},
@@ -630,10 +779,13 @@ fn testTooManyTuple(comptime T: type, comptime tag: std.meta.Tag(EscSeq), compti
 }
 
 fn testSingleIntEscSeq(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime default: T) !void {
+	const nonDefault: T = 3;
+	try expect(nonDefault != default);
+
 	try testEmpty(T, tag, fnChar, default);
-	try testCorrect(T, tag, fnChar, 42);
+	try testCorrect(T, tag, fnChar, nonDefault);
 	try testIncorrect(T, tag, fnChar, default);
-	try testTooMany(T, tag, fnChar, 42);
+	try testTooMany(T, tag, fnChar, nonDefault);
 }
 
 test "EscSeq" {
@@ -654,13 +806,38 @@ test "EscSeq" {
 	try testSingleIntEscSeq(u16, EscSeq.moveCursorAbsCol, 'G', 1);
 	try testSingleIntEscSeq(u16, EscSeq.moveCursorAbsRow, 'd', 1);
 
-	try testEmpty(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{1,1});
+	try testEmpty(struct{u16, u16},        EscSeq.moveCursorAbs, 'H', .{1,1});
 	try testCorrectTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{24,94});
-	try testIncorrect(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{1,1});
+	try testIncorrect(struct{u16, u16},    EscSeq.moveCursorAbs, 'H', .{1,1});
 	try testTooManyTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'H', .{24,94});
-	
-	try testEmpty(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{1,1});
+	try testEmpty(struct{u16, u16},        EscSeq.moveCursorAbs, 'f', .{1,1});
 	try testCorrectTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{24,94});
-	try testIncorrect(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{1,1});
+	try testIncorrect(struct{u16, u16},    EscSeq.moveCursorAbs, 'f', .{1,1});
 	try testTooManyTuple(struct{u16, u16}, EscSeq.moveCursorAbs, 'f', .{24,94});
+
+	try testSingleIntEscSeq(u16, EscSeq.cursorForwardTabulation, 'I', 1);
+	try testSingleIntEscSeq(u16, EscSeq.cursorBackwardTabulation, 'Z', 1);
+
+	try testSingleIntEscSeq(u2,  EscSeq.eraseDisplay, 'J', 1);
+	try testSingleIntEscSeq(u2,  EscSeq.eraseLine,    'K', 1);
+	try testSingleIntEscSeq(u16, EscSeq.eraseChars,   'X', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.deleteLines, 'M', 1);
+	try testSingleIntEscSeq(u16, EscSeq.deleteChars, 'P', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.scrollUp,   'S', 1);
+	try testSingleIntEscSeq(u16, EscSeq.scrollDown, 'T', 1);
+
+	try testSingleIntEscSeq(u16, EscSeq.repeatPreceedingChar, 'b', 1);
+
+	// TODO high low testing per input, mixed inputs, invalid inputs
+	// h(x) -> high (set)
+	// l(x) -> low  (unset)
+	//// "\x1b[{x}{h/l}" -> (re)set mode
+	//resetMode: ResetMode,
+	// TODO i dont see any results from this and there were no changes when trying reported x values
+	//// "\x1b[={x}{h/l}" -> (un)set screen mode
+	//screenMode: ScreenMode,
+	//// "\x1b[?{x}{h/l}" -> (un)set private modes
+	//privateMode: PrivateMode,
 }
