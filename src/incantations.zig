@@ -390,41 +390,193 @@ const PrivateMode = packed struct {
 const RGB = struct {u8, u8, u8};
 
 const Color = union(enum) {
-	// TODO pallet8 constants fg (30...39) & bg (40...49)
 	pallet8:   u8,
-	// TODO pallet16 constants fg (90...97) & bg (100...107)
-	pallet16:  u8,
 	pallet256: u8,
-	rbg:       RGB,
+	rgb:       RGB,
+};
+
+const GraphicResetOpt = enum(u1) {
+	Unset,
+	Set,
+};
+
+const GraphicOpt = enum(u2) {
+	Unset,
+	Set,
+	Reset,
 };
 
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
-// When parsing a 0 should full reset to defaults with reset set to true
-// color can only be set once and will overwrite
 // TODO make packed
 const Graphics = struct {
-	reset: bool = false, // 0
+	reset: GraphicResetOpt = .Unset, // 0 (default)
 
-	bold:          bool = false, // 1
-	faint:         bool = false, // 2
-	italic:        bool = false, // 3
-	underline:     bool = false, // 4
-	blinking:      bool = false, // 5
-	inverse:       bool = false, // 7
-	hidden:        bool = false, // 8
-	strikethrough: bool = false, // 9
+	bold:            GraphicOpt = .Unset, // 1
+	faint:           GraphicOpt = .Unset, // 2
+	italic:          GraphicOpt = .Unset, // 3
+	underline:       GraphicOpt = .Unset, // 4
+	blinking:        GraphicOpt = .Unset, // 5
+	inverse:         GraphicOpt = .Unset, // 7
+	hidden:          GraphicOpt = .Unset, // 8
+	strikethrough:   GraphicOpt = .Unset, // 9
+	doubleUnderline: GraphicOpt = .Unset, // 21
+	//noBoldOrFaint   // 22
+	//noItalic        // 23
+	//noUnderline     // 24
+	//steady          // 25
+	//positive        // 27
+	//visible         // 28
+	//noStrikethrough // 29
 
-	doubleUnderline: bool = false, // 21
-	normal:          bool = false, // 22
-	noItalics:       bool = false, // 23
-	noUnderline:     bool = false, // 24
-	steady:          bool = false, // 25
-	positive:        bool = false, // 27
-	visible:         bool = false, // 28
-	noStrikethrough: bool = false, // 29
+	// both can be applied to create faint bold
+	//try stdout.print("\x1b[1;2mtesting\x1b[mtesting\n", .{});
+	// bold
+	//try stdout.print("\x1b[1mtesting\x1b[mtesting\n", .{});
+	// faint
+	//try stdout.print("\x1b[2mtesting\x1b[mtesting\n", .{});
+
+	// 22 resets faint and bold
+	//try stdout.print("\x1b[1;2;22mtesting\x1b[mtesting\n", .{});
+
+	// foreground
+	// 30 Black
+	// 31 Red
+	// 32 Green
+	// 33 Yellow
+	// 34 Blue
+	// 35 Magenta
+	// 36 Cyan
+	// 37 White
+	// 39 default, ECMA-48 3rd
+
+	// background
+	// 40 Black
+	// 41 Red
+	// 42 Green
+	// 43 Yellow
+	// 44 Blue
+	// 45 Magenta
+	// 46 Cyan
+	// 47 White
+	// 49 default, ECMA-48 3rd
+
+	// aixterm bright/bold foreground
+	// 90 Black
+	// 91 Red
+	// 92 Green
+	// 93 Yellow
+	// 94 Blue
+	// 95 Magenta
+	// 96 Cyan
+	// 97 White
+
+	// aixterm bright/bold background
+	// 100 Black
+	// 101 Red
+	// 102 Green
+	// 103 Yellow
+	// 104 Blue
+	// 105 Magenta
+	// 106 Cyan
+	// 107 White
+
+	// TODO?
+	// If xterm is compiled with the 16-color support disabled, it supports the following, from rxvt
+	// 100 - Set foreground and background color to default
+
+	// 256
+	// 38;5;{ID}m - foreground
+	// 48;5;{ID}m - background
+				
+	// RGB
+	// 38;2;{r};{g};{b}m - foreground
+	// 48;2;{r};{g};{b}m - background
 
 	fg: ?Color = null,
 	bg: ?Color = null,
+
+	fn parse(bytes: []const u8) @This() {
+		assert(bytes[bytes.len-1] == 'm');
+
+		var out: @This() = .{};
+
+		// the m is ignored for proper parsing
+		var it = IntParserIterator.init(bytes[0..bytes.len-1]);
+		// TODO will need state for multi int sequences
+		// color can only be set once and will overwrite
+		while (true) {
+			const val = it.next(u8) catch |err| {
+				switch (err) {
+					error.NoRemaining => break,
+					else => continue,
+				}
+			};
+
+			switch (val) {
+				// Full reset
+				0  => out = .{.reset = .Set},
+
+				// Set
+				1  => out.bold            = .Set,
+				2  => out.faint           = .Set,
+				3  => out.italic          = .Set,
+				4  => out.underline       = .Set,
+				5  => out.blinking        = .Set,
+				7  => out.inverse         = .Set,
+				8  => out.hidden          = .Set,
+				9  => out.strikethrough   = .Set,
+				21 => out.doubleUnderline = .Set,
+				
+				// Reset
+				22 => {
+					out.bold = .Reset;
+					out.faint = .Reset;
+				},
+				23 => out.italic          = .Reset,
+				24 => out.underline       = .Reset,
+				25 => out.blinking        = .Reset,
+				27 => out.inverse         = .Reset,
+				28 => out.hidden          = .Reset,
+				29 => out.strikethrough   = .Reset,
+
+				// pallet8
+				30...37, 39 => out.fg = .{.pallet8 = val},
+				40...47, 49 => out.bg = .{.pallet8 = val},
+
+				// aixterm bright/bold pallet8
+				90...97   => out.fg = .{.pallet8 = val},
+				100...107 => out.bg = .{.pallet8 = val},
+
+				// foreground/background pallet256/rgb
+				// 38;5;{color}m     foreground pallet256
+				// 38;2;{r};{g};{b}m foreground rgb
+				// 48;5;{color}m     background pallet256
+				// 48;2;{r};{g};{b}m background rgb
+				38, 48 => {
+					const format = it.next(u3) catch continue;
+					var color: Color = undefined;
+
+					if (format == 5) color = .{.pallet256 = it.next(u8) catch continue}
+					else if (format == 2) {
+						color = .{.rgb = .{
+							it.next(u8) catch continue,
+							it.next(u8) catch continue,
+							it.next(u8) catch continue,
+						}};
+					}
+
+					if (val == 38) out.fg = color
+					else if (val == 48) out.bg = color
+					else unreachable;
+				},
+
+				else => {},
+			}
+
+		}
+
+		return out;
+	}
 };
 
 const IntParserIterator = struct {
@@ -637,9 +789,21 @@ pub const EscSeq = union(enum) {
 						'h', 'l' => return switch (bytes[2]) {
 							// TODO not currently handling screenMode
 							'='  => .{.{.unknown = {}}, i+1},
-							'?'  => .{.{.privateMode = PrivateMode.parse(bytes[2..i])}, i+1},
-							else => .{.{.resetMode = ResetMode.parse(bytes[2..i])}, i+1},
+							'?'  => .{.{.privateMode = PrivateMode.parse(bytes[2..i+1])}, i+1},
+							else => .{.{.resetMode = ResetMode.parse(bytes[2..i+1])}, i+1},
 						},
+
+						'm' => return .{.{.graphics = Graphics.parse(bytes[2..i+1])}, i+1},
+
+						// TODO not sure theres a default
+						'n' => return .{.{.deviceStatusReport = parseFirstInteger(u3, bytes[2..i]) orelse 5}, i+1},
+						
+						'q' => return .{.{.setCursorStyle = parseFirstInteger(u3, bytes[2..i]) orelse 1}, i+1},
+
+						's' => return .{.{.saveCursorPosition    = {}}, i+1},
+						'u' => return .{.{.restoreCursorPosition = {}}, i+1},
+
+						// TODO mouse
 
 						else => {},
 					}
@@ -778,6 +942,14 @@ fn testTooManyTuple(comptime T: type, comptime tag: std.meta.Tag(EscSeq), compti
 	try expect(len == in.len);	
 }
 
+fn testTooManyVoid(comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8) !void {
+	const in = std.fmt.comptimePrint("\x1b[1;2;3{c}", .{fnChar});
+	const out, const len = try EscSeq.parse(in);
+	try expect(std.meta.activeTag(out) == tag);
+	try expect(@field(out, @tagName(tag)) == {});
+	try expect(len == in.len);	
+}
+
 fn testSingleIntEscSeq(comptime T: type, comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8, comptime default: T) !void {
 	const nonDefault: T = 3;
 	try expect(nonDefault != default);
@@ -786,6 +958,12 @@ fn testSingleIntEscSeq(comptime T: type, comptime tag: std.meta.Tag(EscSeq), com
 	try testCorrect(T, tag, fnChar, nonDefault);
 	try testIncorrect(T, tag, fnChar, default);
 	try testTooMany(T, tag, fnChar, nonDefault);
+}
+
+fn testVoidEscSeq(comptime tag: std.meta.Tag(EscSeq), comptime fnChar: u8) !void {
+	try testEmpty(void, tag, fnChar, {});
+	try testIncorrect(void, tag, fnChar, {});
+	try testTooManyVoid(tag, fnChar);
 }
 
 test "EscSeq" {
@@ -830,14 +1008,30 @@ test "EscSeq" {
 
 	try testSingleIntEscSeq(u16, EscSeq.repeatPreceedingChar, 'b', 1);
 
-	// TODO high low testing per input, mixed inputs, invalid inputs
-	// h(x) -> high (set)
-	// l(x) -> low  (unset)
-	//// "\x1b[{x}{h/l}" -> (re)set mode
-	//resetMode: ResetMode,
-	// TODO i dont see any results from this and there were no changes when trying reported x values
-	//// "\x1b[={x}{h/l}" -> (un)set screen mode
-	//screenMode: ScreenMode,
-	//// "\x1b[?{x}{h/l}" -> (un)set private modes
-	//privateMode: PrivateMode,
+	// TODO high & low testing table driven for testing every option, mixed inputs, invalid inputs
+	try testEmpty(ResetMode, EscSeq.resetMode, 'h', .{.isHigh = true});
+	//try testCorrect(ResetMode, EscSeq.resetMode, 'h', .{.isHigh = true});
+	try testIncorrect(ResetMode, EscSeq.resetMode, 'h', .{.isHigh = true});
+	try testEmpty(ResetMode, EscSeq.resetMode, 'l', .{.isHigh = false});
+	//try testCorrect(ResetMode, EscSeq.resetMode, 'l', .{.isHigh = false});
+	try testIncorrect(ResetMode, EscSeq.resetMode, 'l', .{.isHigh = false});
+	
+	// TODO high & low testing table driven for testing every option, mixed inputs, invalid inputs
+	//try testEmpty(PrivateMode, EscSeq.privateMode, 'h', .{.isHigh = true});
+	//try testCorrect(PrivateMode, EscSeq.privateMode, 'h', .{.isHigh = true});
+	//try testIncorrect(PrivateMode, EscSeq.privateMode, 'h', .{.isHigh = true});
+	//try testEmpty(PrivateMode, EscSeq.privateMode, 'l', .{.isHigh = false});
+	//try testCorrect(PrivateMode, EscSeq.privateMode, 'l', .{.isHigh = false});
+	//try testIncorrect(PrivateMode, EscSeq.privateMode, 'l', .{.isHigh = false});
+
+	// TODO test graphics
+	// TODO test Mouse
+
+	try testSingleIntEscSeq(u3, EscSeq.deviceStatusReport, 'n', 5);
+
+	try testSingleIntEscSeq(u3, EscSeq.setCursorStyle, 'q', 1);
+
+
+	try testVoidEscSeq(EscSeq.saveCursorPosition, 's');
+	try testVoidEscSeq(EscSeq.restoreCursorPosition, 'u');
 }
