@@ -5,6 +5,7 @@ const expect = std.testing.expect;
 const expectErr = std.testing.expectError;
 
 const ESC: u8 = 27;
+const CSI: [2]u8 = .{ESC, '['};
 const ASCIIIntOffset: u8 = 48;
 const u64MaxStrLen: usize = 20;
 const u16MaxStrLen: usize = 5;
@@ -129,17 +130,43 @@ test "parseFirstInteger" {
 	}
 }
 
-// ESC[{u3} q
-// the space is required
+const ParseErr = error {
+	InsufficientLen,
+	IncorrectFormat,
+	NoDefault,
+	InvalidInt,
+};
+
+fn parse(comptime Enum: type, bytes: []const u8) ParseErr!Enum {
+	if (bytes.len < Enum.defaultStr.len) return error.InsufficientLen;
+	if (!std.mem.eql(u8, &CSI, bytes[0..2])) return error.IncorrectFormat;
+	if (!std.mem.eql(u8, &Enum.fnName, bytes[bytes.len-Enum.fnName.len..])) return error.IncorrectFormat;
+
+	// empty
+	if (bytes.len-Enum.fnName.len-2 == 0) {
+		if (Enum.default) |val| return val
+		else return error.NoDefault;
+	}
+
+	if (parseFirstInteger(u3, bytes[2..bytes.len-Enum.fnName.len])) |val| {
+		if (std.meta.intToEnum(Enum, val)) |out| return out
+		else |_| {}
+	}
+
+	return error.InvalidInt;
+}
+
+fn print(comptime Enum: type, val: Enum) [3 + Enum.fnName.len]u8 {
+	return CSI ++ .{@intFromEnum(val) + ASCIIIntOffset} ++ Enum.fnName;
+}
+
 pub const CursorStyle = enum(u3) {
 	const Self = @This();
 
-	pub const fnChar: u8 = 'q';
-	const minLen: usize = 4;
-	const default: Self = .blinkingBlockDefault;
-	const defaultStr: [4]u8 = .{ESC, '[', ' ', 'q'};
-	const formatInt: []const u8 = "\x1b[{d} q";
-	const formatStr: []const u8 = "\x1b[{s} q";
+	// the space is required
+	pub const fnName: [2]u8 = .{' ', 'q'};
+	const default:    ?Self = .blinkingBlockDefault;
+	const defaultStr: [4]u8 = CSI ++ Self.fnName;
 
 	blinkingBlock        = 0,
 	blinkingBlockDefault = 1,
@@ -148,47 +175,167 @@ pub const CursorStyle = enum(u3) {
 	steadyUnderline      = 4,
 	blinkingBar          = 5,
 	steadyBar            = 6,
+};
 
-	const ParseErr = error {
-		InsufficientLen,
-		IncorrectFormat,
-		InvalidInt,
-	};
+pub const EraseDisplay = enum(u2) {
+	const Self = @This();
 
-	fn parse(bytes: []const u8) Self.ParseErr!Self {
-		const len = bytes.len;
-		if (len < minLen) return error.InsufficientLen;
-		if (bytes[0] != ESC or bytes[1] != '[' or bytes[len-2] != ' ' or bytes[len-1] != Self.fnChar) return error.IncorrectFormat;
+	pub const fnName: [1]u8 = .{'J'};
+	const default:    ?Self = Self.cursorToEnd;
+	const defaultStr: [3]u8 = CSI ++ Self.fnName;
 
-		// empty
-		if (std.mem.eql(u8, &Self.defaultStr, bytes)) return Self.default;
+	// end of screen
+	cursorToEnd  = 0,
+	// beginning of screen
+	cursorToHome = 1,
+	all          = 2,
+	// scrollback
+	savedLines   = 3,
+};
 
-		if (parseFirstInteger(u3, bytes[2..len-2])) |val| {
-			if (std.meta.intToEnum(Self, val)) |out| return out
-			else |_| {}
-		}
+pub const EraseLine = enum(u2) {
+	const Self = @This();
 
-		return error.InvalidInt;
-	}
+	pub const fnName: [1]u8 = .{'K'};
+	const default:    ?Self = Self.cursorToEnd;
+	const defaultStr: [3]u8 = CSI ++ Self.fnName;
 
-	fn print(self: Self) [5]u8 {
-		return .{ESC, '[', @intFromEnum(self) + ASCIIIntOffset, ' ', 'q'};
-	}
+	cursorToEnd   = 0,
+	cursorToStart = 1,
+	entire        = 2,
+	// scrollback
+	saved         = 3,
+};
+
+pub const DeviceStatusReport = enum(u3) {
+	const Self = @This();
+
+	pub const fnName: [1]u8 = .{'K'};
+	const default:    ?Self = null;
+	const defaultStr: [3]u8 = CSI ++ Self.fnName;
+
+	statusReport   = 5,
+	cursorPosition = 6,
+};
+
+// TODO pull uXs into their own type for testing (consider making a fn to return this type)
+pub const EscSeq = union(enum) {
+	// @(?x) - insert x (default 1) blank chars
+	insertBlankChars: u16,
+	// L(?x) - insert x (default 1) blank lines above
+	insertBlankLines: u16,
+
+
+	// A(?x) - move cursor up x (default 1) rows
+	moveCursorUp: u16,
+	// TODO: CSI Ps e, is apparently the same fn but didnt work
+	// B(?x) - move cursor down x (default 1) rows
+	moveCursorDown: u16,
+	// C(?x) - move cursor right x (default 1) cols
+	moveCursorRight: u16,
+	// D(?x) - move cursor left x (default 1) cols
+	moveCursorLeft: u16,
+
+
+	// E(?x) - move cursor to start of next line, x (default 1) lines down
+	moveCursorToStartOfNextLine: u16,
+	// F(?x) - moves cursor to start of prev line, x (default 1) lines up
+	// TODO this and the 'end' key have a collision, but don't do the same thing
+	// TODO im also seeing 'end' being SS3 instead of CSI, but isn't the case when testing
+	moveCursorToStartOfPrevLine: u16,
+
+
+	// G(?x) - moves cursor to column x (default 1)
+	moveCursorAbsCol: u16,
+	// d(?x) - moves cursor to row x (default 1)
+	moveCursorAbsRow: u16,
+
+
+	// H(?y, ?x) - move cursor to y (default 1), x (default 1)
+	// f(?y, ?x) - move cursor to y (default 1), x (default 1)
+	moveCursorAbs: struct{u16, u16},
+
+
+	// I(?x) - Cursor Forward Tabulation x (default 1) tab stops
+	cursorForwardTabulation: u16,
+	// Z(?x) - cursor backward tabulation x (default 1) tab stops
+	cursorBackwardTabulation: u16,
+
+
+	// TODO vt220 "ESC[?xJ" variant?
+	// J(?x)
+	eraseDisplay: EraseDisplay,
+	// TODO vt220 "ESC[?xK" variant?
+	// K(?x)
+	eraseLine: EraseLine,
+
+
+	// X(?x) -> erase x (default 1) chars on current line
+	eraseChars: u16,
+
+
+	// M(?x) -> delete x (default 1) lines
+	deleteLines: u16,
+	// P(?x) -> delete x (default 1) chars on current line
+	deleteChars: u16,
+
+
+	// S(?x) -> scroll up x (default 1) lines
+	scrollUp: u16,
+	// T(?x) -> scroll down x (default 1) lines
+	scrollDown: u16,
+
+
+	// b(?x) -> repeat preceeding char x (default 1) times
+	repeatPreceedingChar: u16,
+
+
+	// h(x) -> high (set)
+	// l(x) -> low  (unset)
+	//// "\x1b[{x}{h/l}" -> (re)set mode
+	//resetMode: ResetMode,
+	// TODO i dont see any results from this and there were no changes when trying reported x values
+	//// "\x1b[={x}{h/l}" -> (un)set screen mode
+	//screenMode: ScreenMode,
+	//// "\x1b[?{x}{h/l}" -> (un)set private modes
+	//privateMode: PrivateMode,
+
+
+	// m(...x) -> sets graphics dependant upon x (default 0)
+	//graphics: Graphics,
+
+
+	// n(x)
+	deviceStatusReport: DeviceStatusReport,
+
+
+	// " q"(?x)
+	setCursorStyle: CursorStyle,
+
+
+	// s() -> save cursor position
+	saveCursorPosition: void,
+	// u() -> restores the cursor to the last saved position
+	restoreCursorPosition: void,
 };
 
 fn testEnum(comptime Enum: type) !void {
 	// default
-	try expect(try Enum.parse(&Enum.defaultStr) == Enum.default);
+	{
+		const res = parse(Enum, &Enum.defaultStr);
+		if (Enum.default) |val| try expect(val == Enum.default)
+		else try expect(res == ParseErr.NoDefault);
+	}
 
 	// every field parses and prints
 	// enum (src) -> print (bytes) -> parse (out) -> print (outBytes)
 	// ensures there is no data loss between conversions for all valid values
 	inline for (std.meta.fields(Enum)) |f| {
 		const src: Enum = @enumFromInt(f.value);
-		const bytes = src.print();
+		const bytes = print(Enum, src);
 		
-		const out = try Enum.parse(&bytes);
-		const outBytes = out.print();
+		const out = try parse(Enum, &bytes);
+		const outBytes = print(Enum, out);
 		
 		try expect(src == out);
 		try expect(std.mem.eql(u8, &bytes, &outBytes));
@@ -198,10 +345,12 @@ fn testEnum(comptime Enum: type) !void {
 	{
 		const maxInputs: usize = 16;
 		
-		// first input is the default so that we can easily expect the default to be returned
+		// first input is the first enum field so that it can be easily expected against
 		// every other input is i^i
 		var inputs: [maxInputs]u64 = undefined;
-		inputs[0] = @intFromEnum(Enum.default);
+		const firstEnumValue = std.meta.fields(Enum)[0].value;
+		const firstEnum: Enum = @enumFromInt(firstEnumValue);
+		inputs[0] = firstEnumValue;
 		for (1..maxInputs) |i| inputs[i] = std.math.pow(u64, i, i);
 
 		var inputStrsBackingBuf: [maxInputs][u64MaxStrLen]u8 = undefined;
@@ -217,8 +366,8 @@ fn testEnum(comptime Enum: type) !void {
 			std.mem.copyForwards(u8, maxInputBuf[index..], inputStrs[i]);
 			index += inputStrs[i].len;
 
-			const str = std.fmt.bufPrint(&maxFormatBuf, Enum.formatStr, .{maxInputBuf[0..index]}) catch unreachable;
-			try expect(try Enum.parse(str) == Enum.default);
+			const str = std.fmt.bufPrint(&maxFormatBuf, CSI ++ "{s}" ++ Enum.fnName, .{maxInputBuf[0..index]}) catch unreachable;
+			try expect(try parse(Enum, str) == firstEnum);
 
 			maxInputBuf[index] = ';';
 			index += 1;
@@ -226,10 +375,10 @@ fn testEnum(comptime Enum: type) !void {
 	}
 
 	// InsufficientLen
-	// checks all lens less than minLen return InsufficientLen
+	// checks all lens less than min len and returns InsufficientLen
 	{
-		var buf: [Enum.minLen]u8 = undefined;
-		for (0..Enum.minLen) |i| try expectErr(Enum.ParseErr.InsufficientLen, Enum.parse(buf[0..i]));
+		var buf: [Enum.defaultStr.len]u8 = undefined;
+		for (0..Enum.defaultStr.len) |i| try expectErr(ParseErr.InsufficientLen, parse(Enum, buf[0..i]));
 	}
 
 	// IncorrectFormat
@@ -238,7 +387,7 @@ fn testEnum(comptime Enum: type) !void {
 		for (0..Enum.defaultStr.len) |i| {
 			var defaultCopy = Enum.defaultStr;
 			defaultCopy[i] = defaultCopy[i] +% 1;
-			try expectErr(Enum.ParseErr.IncorrectFormat, Enum.parse(&defaultCopy));
+			try expectErr(ParseErr.IncorrectFormat, parse(Enum, &defaultCopy));
 		}
 	}
 
@@ -251,12 +400,15 @@ fn testEnum(comptime Enum: type) !void {
 			// number must not be a valid enum val
 			if (std.meta.intToEnum(Enum, i) != std.meta.IntToEnumError.InvalidEnumTag) continue;
 
-			const str = std.fmt.bufPrint(&buf, Enum.formatInt, .{i}) catch unreachable;
-			try expectErr(Enum.ParseErr.InvalidInt, Enum.parse(str));
+			const str = std.fmt.bufPrint(&buf, CSI ++ "{d}" ++ Enum.fnName, .{i}) catch unreachable;
+			try expectErr(ParseErr.InvalidInt, parse(Enum, str));
 		}
 	}
 }
 
 test "EscSeq" {
+	try testEnum(EraseDisplay);
+	try testEnum(EraseLine);
 	try testEnum(CursorStyle);
+	try testEnum(DeviceStatusReport);
 }
