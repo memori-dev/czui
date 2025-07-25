@@ -3,15 +3,34 @@ const assert = std.debug.assert;
 const stdout = std.io.getStdOut().writer();
 
 const ESC: u8 = 27;
-const CSI: [2]u8 = .{ESC, '['};
+pub const CSI: [2]u8 = .{ESC, '['};
 
 const specNamePrefix = "Spec";
 
-// PARSING MULTI-INT FNS (TESTING)
-// non-known ints are ignored
-// numbers out of range are ignored
-// empty are valid and ignored
-// non-numeric chars cause an error
+pub const IntParserIterator = struct {
+	const Self = @This();
+
+	it: std.mem.SplitIterator(u8, .sequence),
+
+	pub fn next(self: *Self, comptime T: type) error{InvalidCharacter}!?T {
+		while (self.it.next()) |str| {
+			if (str.len == 0) continue;
+
+			return std.fmt.parseInt(T, str, 10) catch |err| {
+				// only invalid ints will cause an error
+				if (err == error.InvalidCharacter) return error.InvalidCharacter
+				else continue;
+			};
+		}
+		
+		return null;
+	}
+
+	pub fn init(bytes: []const u8) !Self {
+		if (bytes.len == 0) return error.NoArguments;
+		return .{.it = std.mem.splitSequence(u8, bytes, ";")};
+	}
+};
 
 const Builder = struct {
 	const Self = @This();
@@ -44,8 +63,7 @@ const Builder = struct {
 	}
 };
 
-pub const SpecSetResetMode = enum(u5) {
-	const IncantationName  = "SetResetMode";
+pub const SetResetMode = enum(u5) {
 	const PostCSIChar: ?u8 = null;
 
 	keyboardAction =  2,
@@ -54,8 +72,7 @@ pub const SpecSetResetMode = enum(u5) {
 	normalLinefeed = 20,
 };
 
-const SpecPrivateMode = enum(u11) {
-	const IncantationName  = "SetResetMode";
+pub const PrivateMode = enum(u11) {
 	const PostCSIChar: ?u8 = '?';
 
 	applicationCursorKeys = 1,
@@ -135,14 +152,30 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	const specTypeInfo = @typeInfo(Spec).@"enum";
 	var out = Builder.init(allocator);
 
+	const fullTypeName = @typeName(Spec);
+	const typeName = fullTypeName[std.mem.indexOfScalar(u8, fullTypeName, '.').?+1..];
+
+	var minInputLen: usize = 0;
+	inline for (std.meta.fields(Spec)) |field| {
+		const input = std.fmt.allocPrint(allocator, "{d}", .{field.value}) catch unreachable;
+		if (input.len < minInputLen) minInputLen = input.len;
+	}
+
+
 	// header
-	out.print("pub const {s} = packed struct {{", .{Spec.IncantationName});
+	out.print("pub const {s} = packed struct {{", .{typeName});
 
 	// consts
 	out.indent = 1;
 	out.write("const Self = @This();\n");
-	if (Spec.PostCSIChar) |char| out.print("pub const postCSIChar: ?u8    = '{c}';", .{char})
-	else out.write("pub const postCSIChar: ?u8    = null;");
+	if (Spec.PostCSIChar) |char| {
+		out.print("pub const postCSIChar: ?u8    = '{c}';", .{char});
+		out.print("pub const minLen: usize = {d};", .{CSI.len + 1 + minInputLen + 1});
+	}
+	else {
+		out.write("pub const postCSIChar: ?u8    = null;");
+		out.print("pub const minLen: usize = {d};", .{CSI.len + minInputLen + 1});
+	}
 
 	// fields
 	out.write("");
@@ -152,23 +185,20 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	}
 
 	// parse
-	var minInputLen: usize = 0;
-	inline for (std.meta.fields(Spec)) |field| {
-		const input = std.fmt.allocPrint(allocator, "{d}", .{field.value}) catch unreachable;
-		if (input.len < minInputLen) minInputLen = input.len;
-	}
 	out.write("");
-	out.write("fn parse(bytes: []const u8) !Self {");
+	out.write("pub fn parse(bytes: []const u8) !Self {");
 	out.indent = 2;
-	out.print("if (bytes.len < {d}) return error.InsufficientLen;", .{CSI.len + (if (Spec.PostCSIChar != null) 1 else 0) + minInputLen + 1});
+	out.write("if (bytes.len < Self.minLen) return error.InsufficientLen;");
 	out.write("if (!std.mem.eql(u8, &CSI, bytes[0..2])) return error.IncorrectFormat;");
+	if (Spec.PostCSIChar) |val| out.print("if (bytes[2] != '{c}') return error.IncorrectFormat;", .{val});
 	out.write("if (bytes[bytes.len-1] != 'h' and bytes[bytes.len-1] != 'l') return error.IncorrectFormat;");
 	out.write("");
 	out.write("var out = Self{.isHigh=bytes[bytes.len-1] == 'h'};");
+	out.write("const unmodified = out;");
 	out.print("var it = try IntParserIterator.init(bytes[{d}..bytes.len-1]);", .{if (Spec.PostCSIChar != null) 3 else 2});
 	out.print("while (try it.next({s})) |val| {{", .{@typeName(specTypeInfo.tag_type)});
 	out.indent = 3;
-	out.write("switch (val.?) {");
+	out.write("switch (val) {");
 	out.indent = 4;
 	inline for (std.meta.fields(Spec)) |field| {
 		out.print("{d} => out.{s} = true,", .{field.value, field.name});
@@ -180,7 +210,7 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	out.indent = 2;
 	out.write("}");
 	out.write("// every field cannot be false, meaning unset");
-	out.write("if (out == Self{}) return error.NoValidArguments;");
+	out.write("if (out == unmodified) return error.NoValidArguments;");
 	out.write("return out;");
 	out.indent = 1;
 	out.write("}");
@@ -197,11 +227,16 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	const maxLen: usize = CSI.len + (if (Spec.PostCSIChar != null) 1 else 0)  + maxInputsLen + 1;
 
 	out.write("");
-	out.print("fn print(self: Self) struct{{[{d}]u8, usize}} {{", .{maxLen});
+	out.print("pub fn print(self: Self) struct{{[{d}]u8, usize}} {{", .{maxLen});
 	out.indent = 2;
 	out.print("var out: [{d}]u8 = undefined;", .{maxLen});
 	out.write("std.mem.copyForwards(u8, &out, &CSI);");
-	out.write("var index: usize = 2;");
+	if (Spec.PostCSIChar) |val| {
+		out.print("out[2] = '{c}';", .{val});
+		out.write("var index: usize = 3;");
+	} else {
+		out.write("var index: usize = 2;");		
+	}
 	inline for (std.meta.fields(Spec), 0..) |field, i| {
 		out.print("if (self.{s}) {{", .{field.name});
 		out.print("\tstd.mem.copyForwards(u8, out[index..], \"{s};\");", .{inputStrs[i]});
@@ -216,7 +251,7 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 
 	// closing brace
 	out.indent = 0;
-	out.write("}");
+	out.write("};");
 
 	return out;
 }
@@ -226,14 +261,19 @@ pub fn main() !void {
 	defer arena.deinit();
 	const allocator = arena.allocator();
 
-	//var file = try std.fs.cwd().createFile("_genIncantations.zig", .{});
-	//defer file.close();
+	var file = try std.fs.cwd().createFile("_genIncantations.zig", .{});
+	defer file.close();
 
-	//var bw = std.io.bufferedWriter(file.writer());
-	//const writer = bw.writer();
+	var bw = std.io.bufferedWriter(file.writer());
+	const writer = bw.writer();
 
-	const backer = try generateHiLo(allocator, SpecPrivateMode);
-	stdout.print("{s}", .{backer.al.items}) catch unreachable;
+	try writer.writeAll("const std = @import(\"std\");\n");
+	try writer.writeAll("const CSI = @import(\"incantationSpec.zig\").CSI;\n");
+	try writer.writeAll("const IntParserIterator = @import(\"incantationSpec.zig\").IntParserIterator;\n");
+	try writer.writeAll("\n");
+	try writer.writeAll((try generateHiLo(allocator, SetResetMode)).al.items);
+	try writer.writeAll("\n");
+	try writer.writeAll((try generateHiLo(allocator, PrivateMode)).al.items);
 
-	//try bw.flush();
+	try bw.flush();
 }
