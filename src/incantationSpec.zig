@@ -1,36 +1,7 @@
 const std = @import("std");
+const consts = @import("consts.zig");
 const assert = std.debug.assert;
 const stdout = std.io.getStdOut().writer();
-
-const ESC: u8 = 27;
-pub const CSI: [2]u8 = .{ESC, '['};
-
-const specNamePrefix = "Spec";
-
-pub const IntParserIterator = struct {
-	const Self = @This();
-
-	it: std.mem.SplitIterator(u8, .sequence),
-
-	pub fn next(self: *Self, comptime T: type) error{InvalidCharacter}!?T {
-		while (self.it.next()) |str| {
-			if (str.len == 0) continue;
-
-			return std.fmt.parseInt(T, str, 10) catch |err| {
-				// only invalid ints will cause an error
-				if (err == error.InvalidCharacter) return error.InvalidCharacter
-				else continue;
-			};
-		}
-		
-		return null;
-	}
-
-	pub fn init(bytes: []const u8) !Self {
-		if (bytes.len == 0) return error.NoArguments;
-		return .{.it = std.mem.splitSequence(u8, bytes, ";")};
-	}
-};
 
 const Builder = struct {
 	const Self = @This();
@@ -170,11 +141,11 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	out.write("const Self = @This();\n");
 	if (Spec.PostCSIChar) |char| {
 		out.print("pub const postCSIChar: ?u8    = '{c}';", .{char});
-		out.print("pub const minLen: usize = {d};", .{CSI.len + 1 + minInputLen + 1});
+		out.print("pub const minLen: usize = {d};", .{consts.CSI.len + 1 + minInputLen + 1});
 	}
 	else {
 		out.write("pub const postCSIChar: ?u8    = null;");
-		out.print("pub const minLen: usize = {d};", .{CSI.len + minInputLen + 1});
+		out.print("pub const minLen: usize = {d};", .{consts.CSI.len + minInputLen + 1});
 	}
 
 	// fields
@@ -189,13 +160,13 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 	out.write("pub fn parse(bytes: []const u8) !Self {");
 	out.indent = 2;
 	out.write("if (bytes.len < Self.minLen) return error.InsufficientLen;");
-	out.write("if (!std.mem.eql(u8, &CSI, bytes[0..2])) return error.IncorrectFormat;");
+	out.write("if (!std.mem.eql(u8, &consts.CSI, bytes[0..2])) return error.IncorrectFormat;");
 	if (Spec.PostCSIChar) |val| out.print("if (bytes[2] != '{c}') return error.IncorrectFormat;", .{val});
 	out.write("if (bytes[bytes.len-1] != 'h' and bytes[bytes.len-1] != 'l') return error.IncorrectFormat;");
 	out.write("");
 	out.write("var out = Self{.isHigh=bytes[bytes.len-1] == 'h'};");
 	out.write("const unmodified = out;");
-	out.print("var it = try IntParserIterator.init(bytes[{d}..bytes.len-1]);", .{if (Spec.PostCSIChar != null) 3 else 2});
+	out.print("var it = VariadicArgs.init(bytes[{d}..bytes.len-1]);", .{if (Spec.PostCSIChar != null) 3 else 2});
 	out.print("while (try it.next({s})) |val| {{", .{@typeName(specTypeInfo.tag_type)});
 	out.indent = 3;
 	out.write("switch (val) {");
@@ -224,13 +195,13 @@ fn generateHiLo(allocator: std.mem.Allocator, comptime Spec: type) !Builder {
 		maxInputsLen += inputStrs[i].len;
 	}
 	maxInputsLen += std.meta.fields(Spec).len - 1;
-	const maxLen: usize = CSI.len + (if (Spec.PostCSIChar != null) 1 else 0)  + maxInputsLen + 1;
+	const maxLen: usize = consts.CSI.len + (if (Spec.PostCSIChar != null) 1 else 0)  + maxInputsLen + 1;
 
 	out.write("");
 	out.print("pub fn print(self: Self) struct{{[{d}]u8, usize}} {{", .{maxLen});
 	out.indent = 2;
 	out.print("var out: [{d}]u8 = undefined;", .{maxLen});
-	out.write("std.mem.copyForwards(u8, &out, &CSI);");
+	out.write("std.mem.copyForwards(u8, &out, &consts.CSI);");
 	if (Spec.PostCSIChar) |val| {
 		out.print("out[2] = '{c}';", .{val});
 		out.write("var index: usize = 3;");
@@ -261,15 +232,15 @@ pub fn main() !void {
 	defer arena.deinit();
 	const allocator = arena.allocator();
 
-	var file = try std.fs.cwd().createFile("_genIncantations.zig", .{});
+	var file = try std.fs.cwd().createFile("_genHighLow.zig", .{});
 	defer file.close();
 
 	var bw = std.io.bufferedWriter(file.writer());
 	const writer = bw.writer();
 
 	try writer.writeAll("const std = @import(\"std\");\n");
-	try writer.writeAll("const CSI = @import(\"incantationSpec.zig\").CSI;\n");
-	try writer.writeAll("const IntParserIterator = @import(\"incantationSpec.zig\").IntParserIterator;\n");
+	try writer.writeAll("const consts = @import(\"consts.zig\");\n");
+	try writer.writeAll("const VariadicArgs = @import(\"variadicArgs.zig\");\n");
 	try writer.writeAll("\n");
 	try writer.writeAll((try generateHiLo(allocator, SetResetMode)).al.items);
 	try writer.writeAll("\n");

@@ -1,6 +1,6 @@
 const std = @import("std");
-const CSI = @import("incantationSpec.zig").CSI;
-const IntParserIterator = @import("incantationSpec.zig").IntParserIterator;
+const consts = @import("consts.zig");
+const VariadicArgs = @import("variadicArgs.zig");
 
 pub const SetResetMode = packed struct {
 	const Self = @This();
@@ -16,12 +16,12 @@ pub const SetResetMode = packed struct {
 	
 	pub fn parse(bytes: []const u8) !Self {
 		if (bytes.len < Self.minLen) return error.InsufficientLen;
-		if (!std.mem.eql(u8, &CSI, bytes[0..2])) return error.IncorrectFormat;
+		if (!std.mem.eql(u8, &consts.CSI, bytes[0..2])) return error.IncorrectFormat;
 		if (bytes[bytes.len-1] != 'h' and bytes[bytes.len-1] != 'l') return error.IncorrectFormat;
 		
 		var out = Self{.isHigh=bytes[bytes.len-1] == 'h'};
 		const unmodified = out;
-		var it = try IntParserIterator.init(bytes[2..bytes.len-1]);
+		var it = VariadicArgs.init(bytes[2..bytes.len-1]);
 		while (try it.next(u5)) |val| {
 			switch (val) {
 				2 => out.keyboardAction = true,
@@ -39,7 +39,7 @@ pub const SetResetMode = packed struct {
 	
 	pub fn print(self: Self) struct{[12]u8, usize} {
 		var out: [12]u8 = undefined;
-		std.mem.copyForwards(u8, &out, &CSI);
+		std.mem.copyForwards(u8, &out, &consts.CSI);
 		var index: usize = 2;
 		if (self.keyboardAction) {
 			std.mem.copyForwards(u8, out[index..], "2;");
@@ -144,13 +144,13 @@ pub const PrivateMode = packed struct {
 	
 	pub fn parse(bytes: []const u8) !Self {
 		if (bytes.len < Self.minLen) return error.InsufficientLen;
-		if (!std.mem.eql(u8, &CSI, bytes[0..2])) return error.IncorrectFormat;
+		if (!std.mem.eql(u8, &consts.CSI, bytes[0..2])) return error.IncorrectFormat;
 		if (bytes[2] != '?') return error.IncorrectFormat;
 		if (bytes[bytes.len-1] != 'h' and bytes[bytes.len-1] != 'l') return error.IncorrectFormat;
 		
 		var out = Self{.isHigh=bytes[bytes.len-1] == 'h'};
 		const unmodified = out;
-		var it = try IntParserIterator.init(bytes[3..bytes.len-1]);
+		var it = VariadicArgs.init(bytes[3..bytes.len-1]);
 		while (try it.next(u11)) |val| {
 			switch (val) {
 				1 => out.applicationCursorKeys = true,
@@ -235,7 +235,7 @@ pub const PrivateMode = packed struct {
 	
 	pub fn print(self: Self) struct{[285]u8, usize} {
 		var out: [285]u8 = undefined;
-		std.mem.copyForwards(u8, &out, &CSI);
+		std.mem.copyForwards(u8, &out, &consts.CSI);
 		out[2] = '?';
 		var index: usize = 3;
 		if (self.applicationCursorKeys) {
