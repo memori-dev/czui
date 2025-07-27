@@ -161,6 +161,28 @@ fn printGen(comptime Enum: type, val: Enum) [3 + Enum.fnName.len]u8 {
 	return consts.CSI ++ .{@intFromEnum(val) + consts.ASCIIIntOffset} ++ Enum.fnName;
 }
 
+pub const NavKey = enum(u4) {
+	const self = @This();
+
+	const fnName:     [1]u8  = .{'~'};
+	const default:    ?Self  = null;
+	const defaultStr: ?[0]u8 = null;
+	const minLen:     usize  = consts.CSI.len + 1 + Self.fnName.len;
+
+	insert   = 2,
+	delete   = 3,
+	pageUp   = 5,
+	pageDown = 6,
+
+	pub fn parse(bytes: []const u8) ParseErr!Self {
+		return parseGen(Self, bytes);
+	}
+
+	pub fn print(self: Self) [3 + Self.fnName.len]u8 {
+		return printGen(Self, self);
+	}
+};
+
 pub const CursorStyle = enum(u3) {
 	const Self = @This();
 
@@ -354,6 +376,7 @@ fn testSingularArg(comptime Enum: type) !void {
 }
 
 test "SingularArg Enum" {
+	try testSingularArg(NavKey);
 	try testSingularArg(EraseDisplay);
 	try testSingularArg(EraseLine);
 	try testSingularArg(CursorStyle);

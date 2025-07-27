@@ -15,17 +15,39 @@ pub fn next(self: *Self, comptime T: type) Self.Err!?T {
 	while (self.it.next()) |str| {
 		if (str.len == 0) continue;
 
-		const val = std.fmt.parseInt(T, str, 10) catch |err| {
-			switch (err) {
-				error.InvalidCharacter => return error.InvalidCharacter,
-				error.Overflow => continue,
-			}
+		const val = std.fmt.parseInt(T, str, 10) catch |err| switch (err) {
+			error.InvalidCharacter => return error.InvalidCharacter,
+			error.Overflow => continue,
 		};
 
 		return val;
 	}
 
 	return null;
+}
+
+pub fn nextBetter(self: *Self, comptime T: type) Self.PeekErr!?T {
+	if (self.it.next()) |str| {
+		if (str.len == 0) return error.Empty;
+		return try std.fmt.parseInt(T, str, 10);
+	}
+
+	return null;
+}
+
+pub const PeekErr = error{Empty, InvalidCharacter, Overflow};
+
+pub fn peek(self: Self, comptime T: type) Self.PeekErr!?T {
+	if (self.it.peek()) |str| {
+		if (str.len == 0) return error.Empty;
+		return try std.fmt.parseInt(T, str, 10);
+	}
+
+	return null;
+}
+
+pub fn advance(self: *Self, count: usize) void {
+	for (0..count) |_| _ = self.it.next();
 }
 
 pub fn init(bytes: []const u8) Self {

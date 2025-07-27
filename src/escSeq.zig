@@ -4,6 +4,7 @@ const assert = std.debug.assert;
 
 const EraseDisplay = @import("singularArg.zig").EraseDisplay;
 const EraseLine = @import("singularArg.zig").EraseLine;
+const NavKey = @import("singularArg.zig").NavKey;
 const CursorStyle = @import("singularArg.zig").CursorStyle;
 const DeviceStatusReport = @import("singularArg.zig").DeviceStatusReport;
 const SetResetMode = @import("_genIncantations.zig").SetResetMode;
@@ -11,6 +12,10 @@ const PrivateMode = @import("_genIncantations.zig").PrivateMode;
 
 // all unsigned ints have a default value of 1
 pub const EscSeq = union(enum) {
+	// TODO fnKey: FnKey,
+	// ~(x)
+	navKey: NavKey,
+
 	// @(?x) - insert x (default 1) blank chars
 	insertBlankChars: u16,
 	// L(?x) - insert x (default 1) blank lines above
@@ -59,39 +64,42 @@ pub const EscSeq = union(enum) {
 	// TODO vt220 "ESC[?xK" variant?
 	// K(?x)
 	eraseLine: EraseLine,
-
-
-	// X(?x) -> erase x (default 1) chars on current line
+	// X(?x) - erase x (default 1) chars on current line
 	eraseChars: u16,
 
 
-	// M(?x) -> delete x (default 1) lines
+	// M(?x) - delete x (default 1) lines
 	deleteLines: u16,
-	// P(?x) -> delete x (default 1) chars on current line
+	// P(?x) - delete x (default 1) chars on current line
 	deleteChars: u16,
 
 
-	// S(?x) -> scroll up x (default 1) lines
+	// S(?x) - scroll up x (default 1) lines
 	scrollUp: u16,
-	// T(?x) -> scroll down x (default 1) lines
+	// T(?x) - scroll down x (default 1) lines
 	scrollDown: u16,
 
 
-	// b(?x) -> repeat preceeding char x (default 1) times
+	// b(?x) - repeat preceeding char x (default 1) times
 	repeatPreceedingChar: u16,
 
 
-	// "{h/l}(...x)"
+	// {h/l}(...x)
 	setResetMode: SetResetMode,
-	// "{h/l}(?, ...x)"
+	// ?{h/l}(...x)
 	privateMode: PrivateMode,
 	// TODO i dont see any results from this and there were no changes when trying reported x values
-	//// "\x1b[={x}{h/l}" -> (un)set screen mode
+	// ={h/l}(...x) -> (un)set screen mode
 	//screenMode: ScreenMode,
 
 
-	// m(...x) -> sets graphics dependant upon x (default 0)
+	// TODO
+	// m(...x) - sets graphics dependant upon x (default 0)
 	//graphics: Graphics,
+
+
+	// TODO
+	//mouse: Mouse,
 
 
 	// n(x)
@@ -102,8 +110,10 @@ pub const EscSeq = union(enum) {
 	setCursorStyle: CursorStyle,
 
 
-	// s() -> save cursor position
+	// s() - save cursor position
 	saveCursorPosition: void,
-	// u() -> restores the cursor to the last saved position
+	// u() - restores the cursor to the last saved position
 	restoreCursorPosition: void,
+
+	unknown: void,
 };
