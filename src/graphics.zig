@@ -18,6 +18,70 @@ pub const Color = packed struct {
 	val:       u24       = 0,
 };
 
+fn parseColor(it: *VariadicArgs) !?Color {
+	// a copy is used to correctly handle advancing the main iter
+	var itCopy = it.*;
+
+	// parse format
+	const formatOpt = itCopy.nextBetter(u3) catch |err| switch (err) {
+			// empty coerces to 0 which performs a full reset and the iter does not advance
+			VariadicArgs.PeekErr.Empty => return null,
+			// invalidates the entire sequence
+			VariadicArgs.PeekErr.InvalidCharacter => return error.ColorFormatInvalidChar,
+			// resets the color and the iter does not advance
+			VariadicArgs.PeekErr.Overflow => return .{.colorType = .reset},
+	};
+
+	// if the format is null the color is reset and the iter does not advance
+	const format = formatOpt orelse return .{.colorType = .reset};
+
+	// resets the color and does not advance
+	if (format != Pallet256Int and format != RGBInt) return .{.colorType = .reset};
+
+	if (format == Pallet256Int) {
+		const colorVal = itCopy.nextBetter(u16) catch |err| switch (err) {
+			// coerces to 0
+			VariadicArgs.PeekErr.Empty => 0,
+			VariadicArgs.PeekErr.Overflow => 0,
+			// invalidates the entire sequence
+			VariadicArgs.PeekErr.InvalidCharacter => return error.Pallet256IntInvalidChar,
+		};
+
+		// if the val is null the color resets and the iter does not advance
+		const val = colorVal orelse return .{.colorType = .reset};
+
+		// return valid color and advance the iter 2
+		it.advance(2);
+		return .{.colorType = .pallet256, .val = @mod(val, 255)};
+	}
+	
+	if (format == RGBInt) {
+		var colors: [3]u16 = undefined;
+		for (0..colors.len) |i| {
+			const val = itCopy.nextBetter(u16) catch |err| switch (err) {
+				// coerces to 0
+				VariadicArgs.PeekErr.Empty => 0,
+				VariadicArgs.PeekErr.Overflow => 0,
+				// invalidates the entire sequence
+				VariadicArgs.PeekErr.InvalidCharacter => return error.Pallet256IntInvalidChar,
+			};
+
+			// if there are not at least 3 ints following, reset the color and do not advance the iter
+			colors[i] = val orelse return .{.colorType = .reset}; 
+		}
+
+		// return rgb and advance the iter 4
+		it.advance(4);
+		var val: u24 = 0;
+		val += @as(u24, @mod(colors[0], 255)) << 16;
+		val += @as(u24, @mod(colors[1], 255)) << 8;
+		val += @as(u24, @mod(colors[2], 255));
+		return .{.colorType = .rgb, .val = val};
+	}
+	
+	unreachable;
+}
+
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
 pub const Graphics = packed struct {
 	const Self = @This();
@@ -38,22 +102,32 @@ pub const Graphics = packed struct {
 	fg: Color = .{},
 	bg: Color = .{},
 
-	fn parse(bytes: []const u8) !Self {
+	pub fn parse(bytes: []const u8) !Self {
 		// TODO length check
 		// TODO format check
-		assert(bytes[bytes.len-1] == 'm');
+		//assert(bytes[bytes.len-1] == 'm');
 
 		var out: Self = .{};
 
 		// the m is ignored for parsing
-		var it = VariadicArgs.init(bytes[0..bytes.len-1]);
+		var it = VariadicArgs.init(bytes[2..bytes.len-1]);
 		while (true) {
-			switch (try it.next(u8)) {
+			const next = it.nextBetter(u8) catch |err| switch (err) {
+				// empty coerces to 0, a full reset
+				VariadicArgs.PeekErr.Empty => 0,
+				// invalidates the entire sequence
+				VariadicArgs.PeekErr.InvalidCharacter => return error.InvalidCharacter,
+				// causes the remaining to be dropped
+				VariadicArgs.PeekErr.Overflow => break,
+			};
+
+			switch (next orelse break) {
 				// full reset
 				0  => out = .{.reset = .set},
 
 				// set
 				1  => out.bold            = .set,
+
 				2  => out.faint           = .set,
 				3  => out.italic          = .set,
 				4  => out.underline       = .set,
@@ -83,76 +157,30 @@ pub const Graphics = packed struct {
 				90...97   => |val| out.fg = .{.colorType = .pallet8, .val = val},
 				100...107 => |val| out.bg = .{.colorType = .pallet8, .val = val},
 
-				// foreground/background pallet256/rgb
 				// 38;5;{color}m     foreground pallet256
 				// 38;2;{r};{g};{b}m foreground rgb
+				ForegroundInt => {
+					if (try parseColor(&it)) |color| out.fg = color;
+				},
+
 				// 48;5;{color}m     background pallet256
 				// 48;2;{r};{g};{b}m background rgb
-				ForegroundInt, BackgroundInt => |val| {
-					// a copy is used to correctly handle advancing the main iter
-					var itCopy = it;
-
-					// parse format
-					const formatOpt = itCopy.nextBetter(u3) catch |err| switch (err) {
-							// empty coerces to 0 which performs a full reset
-							VariadicArgs.PeekErr.Empty => continue,
-							// invalidates the entire sequence
-							VariadicArgs.PeekErr.InvalidChar => return error.ColorFormatInvalidChar,
-							VariadicArgs.PeekErr.Overflow => return error.ColorFormatIntOverflow,
-					};
-					const format = if (formatOpt) |fmt| {
-						// invalidates the entire sequence
-						if (fmt >= 60) return error.ColorFormatIntOverflow;
-
-						// resets the color and does not advance
-						if (fmt != Pallet256Int and val != RGBInt) {
-							if (val == ForegroundInt) out.fg = .{.colorType = .reset},
-							else if (val == BackgroundInt) out.bg = .{.colorType = .reset},
-							else unreachable;
-
-							continue;
-						}
-
-						fmt;
-					}
-					// resets the color
-					else {
-						if (val == ForegroundInt) out.fg = .{.colorType = .reset},
-						else if (val == BackgroundInt) out.bg = .{.colorType = .reset},
-						else unreachable;
-
-						break;
-					};
-
-					// TODO from here
-
-					var color: Color = .{};
-					if (format == Pallet256Int) {
-						//const val = it.peek(u16) catch |err| switch (err) {
-								//VariadicArgs.PeekErr.Empty => 0,
-								//VariadicArgs.PeekErr.InvalidChar => return error.InvalidChar,
-								//VariadicArgs.PeekErr.Overflow => 0,
-						//};
-						//if (val) |v| color = .{.colorType = .pallet256, .val = v};
-						//else break;
-					}
-					else if (format == RGBInt) {
-						//color = .{.rgb = .{
-							//it.next(u8) catch continue,
-							//it.next(u8) catch continue,
-							//it.next(u8) catch continue,
-						//}};
-					}
-					else unreachable;
-
-					if (val == ForegroundInt) out.fg = color
-					else if (val == BackgroundInt) out.bg = color
-					else unreachable;
+				BackgroundInt => {
+					if (try parseColor(&it)) |color| out.bg = color;
 				},
-				// ignore unknown
-				else => {},
-			}
 
+				// causes the remaining to be dropped
+				else => break,
+			}
+		}
+
+		// all dropped must still be valid
+		while (true) {
+			_ = (it.nextBetter(u8) catch |err| switch (err) {
+				// invalidates the entire sequence
+				VariadicArgs.PeekErr.InvalidCharacter => return error.InvalidCharacter,
+				else => continue,
+			}) orelse break;
 		}
 
 		// no values were set, the default is to reset
