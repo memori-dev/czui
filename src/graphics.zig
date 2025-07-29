@@ -1,11 +1,84 @@
 const std = @import("std");
 const consts = @import("consts.zig");
+const expect = std.testing.expect;
 const VariadicArgs = @import("variadicArgs.zig");
+const stdout = std.io.getStdOut().writer();
 
 const Pallet256Int:  u8 = 5;
 const RGBInt:        u8 = 2;
 const ForegroundInt: u8 = 38;
 const BackgroundInt: u8 = 48;
+
+pub const Opts = enum(u8) {
+	bold            =  1,
+	faint           =  2,
+	italic          =  3,
+	underline       =  4,
+	blinking        =  5,
+	inverse         =  7,
+	hidden          =  8,
+	strikethrough   =  9,
+	doubleUnderline = 21,
+};
+
+// TODO?
+// If xterm is compiled with the 16-color support disabled, it supports the following, from rxvt
+// 100 - Set foreground and background color to default
+pub const ResetOpts = enum(u8) {
+	boldAndFaint  = 22,
+	italic        = 23,
+	underline     = 24,
+	blinking      = 25,
+	inverse       = 27,
+	hidden        = 28,
+	strikethrough = 29,
+};
+
+pub const Pallet8Fg = enum(u8) {
+	black   = 30,
+	red     = 31,
+	green   = 32,
+	yellow  = 33,
+	blue    = 34,
+	magenta = 35,
+	cyan    = 36,
+	white   = 37,
+	default = 39,
+};
+
+pub const Pallet8Bg = enum(u8) {
+	black   = 40,
+	red     = 41,
+	green   = 42,
+	yellow  = 43,
+	blue    = 44,
+	magenta = 45,
+	cyan    = 46,
+	white   = 47,
+	default = 49,
+};
+
+pub const AixtermPallet8Fg = enum(u8) {
+	black   = 90,
+	red     = 91,
+	green   = 92,
+	yellow  = 93,
+	blue    = 94,
+	magenta = 95,
+	cyan    = 96,
+	white   = 97,
+};
+
+pub const AixtermPallet8Bg = enum(u8) {
+	black   = 100,
+	red     = 101,
+	green   = 102,
+	yellow  = 103,
+	blue    = 104,
+	magenta = 105,
+	cyan    = 106,
+	white   = 107,
+};
 
 pub const ResetOpt = enum(u1) { unset, set };
 
@@ -18,27 +91,38 @@ pub const Color = packed struct {
 	val:       u24       = 0,
 };
 
-fn parseColor(it: *VariadicArgs) !?Color {
+const ResetColor: Color = .{.colorType = .reset};
+
+const ParseColorErr = error {
+	ColorFormatInvalidChar,
+	Pallet256IntInvalidChar,
+	RGBIntInvalidChar,
+};
+
+// there is weird behavior for ints > 255, which i assume is dependent upon the emulator implementation since i can't find anything about it in the spec
+// i'm choosing to just coerce overflows to 0 and mod 256 everything else
+fn parseColor(it: *VariadicArgs) !Color {
 	// a copy is used to correctly handle advancing the main iter
 	var itCopy = it.*;
 
 	// parse format
 	const formatOpt = itCopy.nextBetter(u3) catch |err| switch (err) {
-			// empty coerces to 0 which performs a full reset and the iter does not advance
-			VariadicArgs.PeekErr.Empty => return null,
 			// invalidates the entire sequence
 			VariadicArgs.PeekErr.InvalidCharacter => return error.ColorFormatInvalidChar,
+			// it likely coerces to a color reset, but
+			// empty will coerce to 0 which performs a full reset and the iter does not advance
+			VariadicArgs.PeekErr.Empty => return ResetColor,
 			// resets the color and the iter does not advance
-			VariadicArgs.PeekErr.Overflow => return .{.colorType = .reset},
+			VariadicArgs.PeekErr.Overflow => return ResetColor,
 	};
 
 	// if the format is null the color is reset and the iter does not advance
-	const format = formatOpt orelse return .{.colorType = .reset};
+	const format = formatOpt orelse return ResetColor;
 
 	// resets the color and does not advance
-	if (format != Pallet256Int and format != RGBInt) return .{.colorType = .reset};
+	if (format != Pallet256Int and format != RGBInt) return ResetColor;
 
-	if (format == Pallet256Int) {
+	if (format == Pallet256Int) {		
 		const colorVal = itCopy.nextBetter(u16) catch |err| switch (err) {
 			// coerces to 0
 			VariadicArgs.PeekErr.Empty => 0,
@@ -48,11 +132,11 @@ fn parseColor(it: *VariadicArgs) !?Color {
 		};
 
 		// if the val is null the color resets and the iter does not advance
-		const val = colorVal orelse return .{.colorType = .reset};
+		const val = colorVal orelse return ResetColor;
 
-		// return valid color and advance the iter 2
+		// return valid color and advance the iter 2{format, color}
 		it.advance(2);
-		return .{.colorType = .pallet256, .val = @mod(val, 255)};
+		return .{.colorType = .pallet256, .val = @mod(val, 256)};
 	}
 	
 	if (format == RGBInt) {
@@ -63,23 +147,203 @@ fn parseColor(it: *VariadicArgs) !?Color {
 				VariadicArgs.PeekErr.Empty => 0,
 				VariadicArgs.PeekErr.Overflow => 0,
 				// invalidates the entire sequence
-				VariadicArgs.PeekErr.InvalidCharacter => return error.Pallet256IntInvalidChar,
+				VariadicArgs.PeekErr.InvalidCharacter => return error.RGBIntInvalidChar,
 			};
 
 			// if there are not at least 3 ints following, reset the color and do not advance the iter
-			colors[i] = val orelse return .{.colorType = .reset}; 
+			colors[i] = val orelse return ResetColor; 
 		}
 
-		// return rgb and advance the iter 4
+		// return rgb and advance the iter 4{format, color, color, color}
 		it.advance(4);
 		var val: u24 = 0;
-		val += @as(u24, @mod(colors[0], 255)) << 16;
-		val += @as(u24, @mod(colors[1], 255)) << 8;
-		val += @as(u24, @mod(colors[2], 255));
+		val += @as(u24, @mod(colors[0], 256)) << 16;
+		val += @as(u24, @mod(colors[1], 256)) << 8;
+		val += @as(u24, @mod(colors[2], 256));
 		return .{.colorType = .rgb, .val = val};
 	}
 	
 	unreachable;
+}
+
+fn context(str: []const u8) void {
+	_ = stdout.write("\x1b[m\x1b[1;4m") catch unreachable;
+	_ = stdout.write(str) catch unreachable;
+	_ = stdout.write("\x1b[m") catch unreachable;
+	_ = stdout.write("\n") catch unreachable;
+}
+
+// three columns; reset graphics, preset graphics, args graphics
+fn argsPrint(args: []const u8) void {
+	_ = stdout.write("\x1b[m\t") catch unreachable;
+	_ = stdout.write(args) catch unreachable;
+
+	stdout.print("\x1b[{d}C", .{32-args.len}) catch unreachable;
+
+	_ = stdout.write("\x1b[32;1;4;9m") catch unreachable;
+	_ = stdout.write(args) catch unreachable;
+
+	stdout.print("\x1b[{d}C", .{32-args.len}) catch unreachable;
+	
+	_ = stdout.write("\x1b[") catch unreachable;
+	_ = stdout.write(args) catch unreachable;
+	_ = stdout.write("m") catch unreachable;
+	_ = stdout.write(args) catch unreachable;
+
+	_ = stdout.write("\x1b[m\n\n") catch unreachable;
+}
+
+test parseColor {
+	const debugPrint = false;
+
+	const NextBetterRes = VariadicArgs.PeekErr!?u16;
+	const testFormat = struct {
+		name:             []const u8,
+		str:              []const u8,
+		parseColorExpect: ParseColorErr!Color,
+		// unnecessary when error.InvalidCharacter is returned
+		remainingExpect:  ?[]const NextBetterRes = null,
+	};
+
+	const tests = [_]testFormat{
+		// color format
+		.{
+			.name = "no additional ints resets the color",
+			.str = "38",
+			.parseColorExpect = ResetColor,
+		},
+		.{
+			.name = "invalidChar invalidates the entire sequence and does not advance the iter",
+			.str = "38;5.",
+			.parseColorExpect = error.ColorFormatInvalidChar,
+		},
+		.{
+			.name = "overflow resets the color and does not advance the iter",
+			.str = "38;999999",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{error.Overflow}
+		},
+		.{
+			.name = "not 5 or 2 resets the color and does not advance",
+			.str = "38;3",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{3}
+		},
+		.{
+			.name = "empty coerces to 0, resets the color, and does not advance the iter. see ^",
+			.str = "38;",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{error.Empty},
+		},
+
+		// pallet256
+		.{
+			.name = "resets color and does not advance the iter",
+			.str = "38;5",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{5},
+		},
+		.{
+			.name = "empty coerces to 0, pallet256 0 (i think)",
+			.str = "38;5;",
+			.parseColorExpect = .{.colorType = .pallet256},
+		},
+		.{
+			.name = "pallet256 0",
+			.str = "38;5;0",
+			.parseColorExpect = .{.colorType = .pallet256},
+		},
+		.{
+			.name = "pallet256 255",
+			.str = "38;5;255",
+			.parseColorExpect = .{.colorType = .pallet256, .val = 255},
+		},
+		.{
+			.name = "modulo pallet256 0",
+			.str = "38;5;256",
+			.parseColorExpect = .{.colorType = .pallet256},
+		},
+		.{
+			.name = "invalid char will invalidate the entire sequence",
+			.str = "38;5;255.",
+			.parseColorExpect = error.Pallet256IntInvalidChar,
+		},
+		
+		// rgb
+		.{
+			.name = "resets color and does not advance the iter",
+			.str = "38;2",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{2},
+		},
+		.{
+			.name = "resets color and does not advance the iter",
+			.str = "38;2;",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{2, error.Empty},
+		},
+		.{
+			.name = "resets color and does not advance the iter",
+			.str = "38;2;;",
+			.parseColorExpect = ResetColor,
+			.remainingExpect = &[_]NextBetterRes{2, error.Empty, error.Empty},
+		},
+		.{
+			.name = "empty coerces to zero, returns rgb 0,0,0 (I think)",
+			.str = "38;2;;;",
+			.parseColorExpect = .{.colorType = .rgb},
+		},
+		.{
+			.name = "rgb 0,0,0",
+			.str = "38;2;0;0;0",
+			.parseColorExpect = .{.colorType = .rgb},
+		},
+		.{
+			.name = "rgb 255,255,255",
+			.str = "38;2;255;255;255",
+			.parseColorExpect = .{.colorType = .rgb, .val = (255 << 16) + (255 << 8) + 255},
+		},
+		.{
+			.name = "modulo rgb 0,0,0",
+			.str = "38;2;256;256;256",
+			.parseColorExpect = .{.colorType = .rgb},
+		},
+		.{
+			.name = "overflow rgb 0,0,0",
+			.str = "38;2;999999;0;0",
+			.parseColorExpect = .{.colorType = .rgb},
+		},
+		.{
+			.name = "invalid char will invalidate the entire sequence",
+			.str = "38;2;255.;255;255",
+			.parseColorExpect = error.RGBIntInvalidChar,
+		},
+	};
+
+	for (tests) |t| {
+		if (debugPrint) {
+			context(t.name);
+			argsPrint(t.str);
+		}
+		
+		var iter = VariadicArgs.init(t.str);
+		_ = iter.nextBetter(u8) catch unreachable;
+
+		// parseColor
+		if (parseColor(&iter)) |res| try expect(res == try t.parseColorExpect)
+		else |err| try expect(err == t.parseColorExpect);
+
+		// remaining nextBetter
+		if (t.remainingExpect) |re| {
+			for (re) |r| {
+				if (iter.nextBetter(u16)) |res| try expect(res == try r)
+				else |err| try expect(err == r);
+			}
+
+			// last nextBetter should return null
+			try expect(try iter.nextBetter(u16) == null);
+		}
+	}
 }
 
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
@@ -159,15 +423,11 @@ pub const Graphics = packed struct {
 
 				// 38;5;{color}m     foreground pallet256
 				// 38;2;{r};{g};{b}m foreground rgb
-				ForegroundInt => {
-					if (try parseColor(&it)) |color| out.fg = color;
-				},
+				ForegroundInt => out.fg = try parseColor(&it),
 
 				// 48;5;{color}m     background pallet256
 				// 48;2;{r};{g};{b}m background rgb
-				BackgroundInt => {
-					if (try parseColor(&it)) |color| out.bg = color;
-				},
+				BackgroundInt => out.bg = try parseColor(&it),
 
 				// causes the remaining to be dropped
 				else => break,
@@ -207,79 +467,3 @@ pub const Graphics = packed struct {
 		//return sum;
 	//}
 };
-
-
-
-
-
-	//noBoldOrFaint   // 22
-	//noItalic        // 23
-	//noUnderline     // 24
-	//steady          // 25
-	//positive        // 27
-	//visible         // 28
-	//noStrikethrough // 29
-
-	// both can be applied to create faint bold
-	//try stdout.print("\x1b[1;2mtesting\x1b[mtesting\n", .{});
-	// bold
-	//try stdout.print("\x1b[1mtesting\x1b[mtesting\n", .{});
-	// faint
-	//try stdout.print("\x1b[2mtesting\x1b[mtesting\n", .{});
-
-	// 22 resets faint and bold
-	//try stdout.print("\x1b[1;2;22mtesting\x1b[mtesting\n", .{});
-
-	// foreground
-	// 30 Black
-	// 31 Red
-	// 32 Green
-	// 33 Yellow
-	// 34 Blue
-	// 35 Magenta
-	// 36 Cyan
-	// 37 White
-	// 39 default, ECMA-48 3rd
-
-	// background
-	// 40 Black
-	// 41 Red
-	// 42 Green
-	// 43 Yellow
-	// 44 Blue
-	// 45 Magenta
-	// 46 Cyan
-	// 47 White
-	// 49 default, ECMA-48 3rd
-
-	// aixterm bright/bold foreground
-	// 90 Black
-	// 91 Red
-	// 92 Green
-	// 93 Yellow
-	// 94 Blue
-	// 95 Magenta
-	// 96 Cyan
-	// 97 White
-
-	// aixterm bright/bold background
-	// 100 Black
-	// 101 Red
-	// 102 Green
-	// 103 Yellow
-	// 104 Blue
-	// 105 Magenta
-	// 106 Cyan
-	// 107 White
-
-	// TODO?
-	// If xterm is compiled with the 16-color support disabled, it supports the following, from rxvt
-	// 100 - Set foreground and background color to default
-
-	// 256
-	// 38;5;{ID}m - foreground
-	// 48;5;{ID}m - background
-				
-	// RGB
-	// 38;2;{r};{g};{b}m - foreground
-	// 48;2;{r};{g};{b}m - background
