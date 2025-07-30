@@ -80,13 +80,13 @@ pub const AixtermPallet8Bg = enum(u8) {
 	white   = 107,
 };
 
-pub const ResetOpt = enum(u1) { unset, set };
+pub const ResetOpt = enum(u1) { unset = 0, set = 1 };
 
-pub const Opt = enum(u2) { unset, set, reset };
+pub const Opt = enum(u2) { unset = 0, set = 1, reset = 2 };
 
-pub const ColorType = enum(u3) { unset, pallet8, pallet256, rgb, reset };
+pub const ColorType = enum(u3) { unset = 0, reset = 1, pallet8 = 2, aixtermPallet8 = 3, pallet256 = 4, rgb = 5 };
 
-pub const Color = packed struct {
+pub const Color = packed struct(u27) {
 	colorType: ColorType = .unset,
 	val:       u24       = 0,
 };
@@ -347,29 +347,35 @@ test parseColor {
 }
 
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
-pub const Graphics = packed struct {
+pub const Graphics = packed struct(u73) {
 	const Self = @This();
+	const fnName:     [1]u8 = .{'m'};
+	const default:    Self  = .{.reset = .set};
+	const defaultStr: [3]u8 = consts.CSI ++ Self.fnName;
+	const minLen:     usize = defaultStr.len;
 
 	reset: ResetOpt = .unset, // 0 (default)
 
-	bold:            Opt = .unset, // 1, 22
-	faint:           Opt = .unset, // 2, 22
-	italic:          Opt = .unset, // 3, 23
-	underline:       Opt = .unset, // 4, 24
-	blinking:        Opt = .unset, // 5, 25
-	inverse:         Opt = .unset, // 7, 27
-	hidden:          Opt = .unset, // 8, 28
-	strikethrough:   Opt = .unset, // 9, 29
-	doubleUnderline: Opt = .unset, // 21
+	bold:            Opt = .unset, // set 1, reset 22
+	faint:           Opt = .unset, // set 2, reset 22
+	italic:          Opt = .unset, // set 3, reset 23
+	underline:       Opt = .unset, // set 4, reset 24
+	blinking:        Opt = .unset, // set 5, reset 25
+	inverse:         Opt = .unset, // set 7, reset 27
+	hidden:          Opt = .unset, // set 8, reset 28
+	strikethrough:   Opt = .unset, // set 9, reset 29
+	doubleUnderline: Opt = .unset, // set 21
 
 	// color can only be set once and will overwrite regardless of colorType
 	fg: Color = .{},
 	bg: Color = .{},
 
-	pub fn parse(bytes: []const u8) !Self {
-		// TODO length check
-		// TODO format check
-		//assert(bytes[bytes.len-1] == 'm');
+	pub const ParseErr = error{InvalidCharacter, InsufficientLen, IncorrectFormat} || ParseColorErr;
+
+	pub fn parse(bytes: []const u8) ParseErr!Self {
+		if (bytes.len < Self.minLen) return error.InsufficientLen;
+		if (!std.mem.eql(u8, &consts.CSI, bytes[0..2])) return error.IncorrectFormat;
+		if (!std.mem.eql(u8, &Self.fnName, bytes[bytes.len-Self.fnName.len..])) return error.IncorrectFormat;
 
 		var out: Self = .{};
 
@@ -391,7 +397,6 @@ pub const Graphics = packed struct {
 
 				// set
 				1  => out.bold            = .set,
-
 				2  => out.faint           = .set,
 				3  => out.italic          = .set,
 				4  => out.underline       = .set,
@@ -418,8 +423,8 @@ pub const Graphics = packed struct {
 				40...47, 49 => |val| out.bg = .{.colorType = .pallet8, .val = val},
 
 				// aixterm bright/bold pallet8
-				90...97   => |val| out.fg = .{.colorType = .pallet8, .val = val},
-				100...107 => |val| out.bg = .{.colorType = .pallet8, .val = val},
+				90...97   => |val| out.fg = .{.colorType = .aixtermPallet8, .val = val},
+				100...107 => |val| out.bg = .{.colorType = .aixtermPallet8, .val = val},
 
 				// 38;5;{color}m     foreground pallet256
 				// 38;2;{r};{g};{b}m foreground rgb
@@ -467,3 +472,102 @@ pub const Graphics = packed struct {
 		//return sum;
 	//}
 };
+
+pub const ResetGraphics: Graphics = Graphics.default;
+
+test Graphics {
+	// default
+	try expect(try Graphics.parse(&Graphics.defaultStr) == Graphics.default);
+
+	// TODO also print
+	// every field parses and prints
+	// enum -> bytes -> parse(src) -> print (bytes) -> parse (out)
+	// ensures there is no data loss between conversions for all valid values
+
+	const ParsePrintOptsTest = struct {
+		optEnum:     type,
+		expectedVal: Opt,
+	};
+	const parsePrintOptsTests = [_]ParsePrintOptsTest{
+		.{.optEnum = Opts, .expectedVal = .set},
+		.{.optEnum = ResetOpts, .expectedVal = .reset},
+	};
+	inline for (parsePrintOptsTests) |ppt| {
+		inline for (std.meta.fields(ppt.optEnum)) |f| {
+			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
+			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
+
+			// check correct field is set
+			var val = Graphics.parse(bytes) catch unreachable;
+			if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
+				try expect(val.bold == ppt.expectedVal);
+				try expect(val.faint == ppt.expectedVal);
+			}
+			else try expect(@field(val, f.name) == ppt.expectedVal);
+
+			// check every other field is unset
+			if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
+				val.bold = .unset;
+				val.faint = .unset;
+			}
+			else @field(val, f.name) = .unset;
+			try expect(val == Graphics{});
+		}
+	}
+
+	const ParsePrintPallet8Test = struct {
+		palletEnum:        type,
+		expectedColorType: ColorType,
+		isFg:              bool,
+	};
+
+	const parsePrintPallet8Tests = [_]ParsePrintPallet8Test{
+		.{.palletEnum = Pallet8Fg, .expectedColorType = .pallet8, .isFg = true},
+		.{.palletEnum = Pallet8Bg, .expectedColorType = .pallet8, .isFg = false},
+		.{.palletEnum = AixtermPallet8Fg, .expectedColorType = .aixtermPallet8, .isFg = true},
+		.{.palletEnum = AixtermPallet8Bg, .expectedColorType = .aixtermPallet8, .isFg = false},
+	};
+	inline for (parsePrintPallet8Tests) |pppt| {
+		inline for (std.meta.fields(pppt.palletEnum)) |f| {
+			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
+			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
+
+			// check correct field is set
+			var val = Graphics.parse(bytes) catch unreachable;
+			if (pppt.isFg) {
+				try expect(val.fg.colorType == pppt.expectedColorType);
+				try expect(val.fg.val == f.value);
+			}
+			else {
+				try expect(val.bg.colorType == pppt.expectedColorType);
+				try expect(val.bg.val == f.value);
+			}
+
+			// check every other field is unset
+			if (pppt.isFg) val.fg = .{} else val.bg = .{};
+			try expect(val == Graphics{});
+		}
+	}
+	
+	for (0..std.math.maxInt(u8)+1) |i| {
+		for ([2]u8{ForegroundInt, BackgroundInt}) |bgFg| {
+			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen + 5]u8 = undefined;
+			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d};5;{d}m", .{bgFg, i}) catch unreachable;
+
+			// check correct field is set
+			var val = Graphics.parse(bytes) catch unreachable;
+			if (bgFg == ForegroundInt) {
+				try expect(val.fg.colorType == .pallet256);
+				try expect(val.fg.val == i);
+			}
+			else {
+				try expect(val.bg.colorType == .pallet256);
+				try expect(val.bg.val == i);
+			}
+
+			// check every other field is unset
+			if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
+			try expect(val == Graphics{});			
+		}
+	}
+}

@@ -1,5 +1,6 @@
 pub const ESC: u8 = 27;
 pub const CSI: [2]u8 = .{ESC, '['};
+pub const u8MaxStrLen: usize = 3;
 pub const u16MaxStrLen: usize = 5;
 pub const u64MaxStrLen: usize = 20;
 pub const ASCIIIntOffset: u8 = 48;
