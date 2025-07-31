@@ -7,8 +7,9 @@ const EraseLine = @import("singularArg.zig").EraseLine;
 const NavKey = @import("singularArg.zig").NavKey;
 const CursorStyle = @import("singularArg.zig").CursorStyle;
 const DeviceStatusReport = @import("singularArg.zig").DeviceStatusReport;
-const SetResetMode = @import("_genIncantations.zig").SetResetMode;
-const PrivateMode = @import("_genIncantations.zig").PrivateMode;
+const Graphics = @import("graphics.zig").Graphics;
+const SetResetMode = @import("_genHighLow.zig").SetResetMode;
+const PrivateMode = @import("_genHighLow.zig").PrivateMode;
 
 // all unsigned ints have a default value of 1
 pub const EscSeq = union(enum) {
@@ -95,7 +96,7 @@ pub const EscSeq = union(enum) {
 
 	// TODO
 	// m(...x) - sets graphics dependant upon x (default 0)
-	//graphics: Graphics,
+	graphics: Graphics,
 
 
 	// TODO
@@ -117,3 +118,7 @@ pub const EscSeq = union(enum) {
 
 	unknown: void,
 };
+
+test {
+    std.testing.refAllDecls(@This());
+}

@@ -1,0 +1,88 @@
+var c = try parseColor(&it); out.fg = c;
+    0x10e06d8 <+2616>: movl   -0x88(%rbp), %eax
+    0x10e06de <+2622>: movl   %eax, %ecx
+    0x10e06e0 <+2624>: movl   %ecx, -0x5c(%rbp)
+->  0x10e06e3 <+2627>: movq   -0xf0(%rbp), %rcx
+    0x10e06ea <+2634>: movabsq $-0x3ffffff80001, %rdx ; imm = 0xFFFFC0000007FFFF 
+    0x10e06f4 <+2644>: andq   %rdx, %rcx
+    0x10e06f7 <+2647>: shlq   $0x13, %rax
+    0x10e06fb <+2651>: orq    %rcx, %rax
+    0x10e06fe <+2654>: movq   %rax, -0xf0(%rbp)
+    0x10e0705 <+2661>: jmp    0x10e0245      ; <+1445> at graphics.zig:448:3
+
+       rax = 0x00000000f8000004
+       rbx = 0x0000000000000000
+       rcx = 0x00000000f8000004
+       rdx = 0x00000000f8000004
+       rdi = 0x00007fffffffdf20
+       rsi = 0x0000000000000005
+       rbp = 0x00007fffffffdb20
+       rsp = 0x00007fffffffd950
+        r8 = 0x0000000000000000
+        r9 = 0x0000000000000000
+       r10 = 0x0000000000000000
+       r11 = 0x0000000000000216
+       r12 = 0x0000000000000000
+       r13 = 0x0000000000000000
+       r14 = 0x0000000000000000
+       r15 = 0x0000000000000000
+       rip = 0x00000000010e06e3  graphics.Graphics.parse + 2627 at graphics.zig:438:9
+    rflags = 0x0000000000000246
+        cs = 0x0000000000000033
+        fs = 0x0000000000000000
+        gs = 0x0000000000000000
+        ss = 0x000000000000002b
+   fs_base = 0x0000000001110010  os.linux.tls.main_thread_area_buffer + 16
+   gs_base = 0x0000000000000000
+        ds = 0x0000000000000000
+        es = 0x0000000000000000
+
+
+
+var c = try parseColor(&it); c.val +%= 1; c.val -%= 1; out.fg = c;
+    0x10e0763 <+2755>: movl   -0x1c4(%rbp), %eax
+    0x10e0769 <+2761>: movl   -0x8c(%rbp), %edx
+    0x10e076f <+2767>: andl   $0xf8000007, %edx ; imm = 0xF8000007 
+    0x10e0775 <+2773>: andl   $0xffffff, %eax ; imm = 0xFFFFFF 
+    0x10e077a <+2778>: movl   %eax, %ecx
+    0x10e077c <+2780>: movl   %edx, %eax
+    0x10e077e <+2782>: leal   (%rax,%rcx,8), %eax
+    0x10e0781 <+2785>: movl   %eax, -0x8c(%rbp)
+->  0x10e0787 <+2791>: movl   -0x8c(%rbp), %eax
+    0x10e078d <+2797>: movl   -0xe8(%rbp), %ecx
+    0x10e0793 <+2803>: movq   -0xf0(%rbp), %rdx
+    0x10e079a <+2810>: movabsq $-0x3ffffff80001, %rsi ; imm = 0xFFFFC0000007FFFF 
+    0x10e07a4 <+2820>: andq   %rsi, %rdx
+    0x10e07a7 <+2823>: andl   $0x7ffffff, %eax ; imm = 0x7FFFFFF 
+    0x10e07ac <+2828>: shlq   $0x13, %rax
+    0x10e07b0 <+2832>: orq    %rdx, %rax
+    0x10e07b3 <+2835>: movw   %cx, -0xe8(%rbp)
+    0x10e07ba <+2842>: movq   %rax, -0xf0(%rbp)
+    0x10e07c1 <+2849>: jmp    0x10e0245      ; <+1445> at graphics.zig:448:3
+
+       rax = 0x00000000f8000004
+       rbx = 0x0000000000000000
+       rcx = 0x0000000000000000
+       rdx = 0x00000000f8000004
+       rdi = 0x00007fffffffdf50
+       rsi = 0x0000000000000005
+       rbp = 0x00007fffffffdb50
+       rsp = 0x00007fffffffd980
+        r8 = 0x0000000000000000
+        r9 = 0x0000000000000000
+       r10 = 0x0000000000000000
+       r11 = 0x0000000000000212
+       r12 = 0x0000000000000000
+       r13 = 0x0000000000000000
+       r14 = 0x0000000000000000
+       r15 = 0x0000000000000000
+       rip = 0x00000000010e0787  graphics.Graphics.parse + 2791 at graphics.zig:438:9
+    rflags = 0x0000000000000246
+        cs = 0x0000000000000033
+        fs = 0x0000000000000000
+        gs = 0x0000000000000000
+        ss = 0x000000000000002b
+   fs_base = 0x0000000001110010  os.linux.tls.main_thread_area_buffer + 16
+   gs_base = 0x0000000000000000
+        ds = 0x0000000000000000
+        es = 0x0000000000000000

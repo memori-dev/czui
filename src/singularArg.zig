@@ -162,7 +162,7 @@ fn printGen(comptime Enum: type, val: Enum) [3 + Enum.fnName.len]u8 {
 }
 
 pub const NavKey = enum(u4) {
-	const self = @This();
+	const Self = @This();
 
 	const fnName:     [1]u8  = .{'~'};
 	const default:    ?Self  = null;
