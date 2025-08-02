@@ -3,6 +3,7 @@ const consts = @import("consts.zig");
 const expect = std.testing.expect;
 const VariadicArgs = @import("variadicArgs.zig");
 const stdout = std.io.getStdOut().writer();
+const assert = std.debug.assert;
 
 const Pallet256Int:  u8 = 5;
 const RGBInt:        u8 = 2;
@@ -95,25 +96,29 @@ const ResetColor: Color = .{.colorType = .reset};
 
 const ParseColorErr = error {
 	ColorFormatInvalidChar,
+	ColorFormatOverflow,
 	Pallet256IntInvalidChar,
+	Pallet256IntOverflow,
 	RGBIntInvalidChar,
+	RGBIntOverflow,
 };
 
-// there is weird behavior for ints > 255, which i assume is dependent upon the emulator implementation since i can't find anything about it in the spec
-// i'm choosing to just coerce overflows to 0 and mod 256 everything else
+// empty is coerced to 0
+// 38/48 (fg/bg) and a non 2/5 (pallet256/rgb), including null, proceeding int will coerce to a color reset
+// overflow is an error and will invalidate the entire sequence
+// if insufficent args are presented, for both pallet256 or rgb, then the color is reset and the iter does not advance
 fn parseColor(it: *VariadicArgs) !Color {
 	// a copy is used to correctly handle advancing the main iter
 	var itCopy = it.*;
 
 	// parse format
 	const formatOpt = itCopy.nextBetter(u3) catch |err| switch (err) {
-			// invalidates the entire sequence
-			VariadicArgs.PeekErr.InvalidCharacter => return error.ColorFormatInvalidChar,
 			// it likely coerces to a color reset, but
 			// empty will coerce to 0 which performs a full reset and the iter does not advance
 			VariadicArgs.PeekErr.Empty => return ResetColor,
-			// resets the color and the iter does not advance
-			VariadicArgs.PeekErr.Overflow => return ResetColor,
+			// invalidates the entire sequence
+			VariadicArgs.PeekErr.InvalidCharacter => return error.ColorFormatInvalidChar,
+			VariadicArgs.PeekErr.Overflow => return error.ColorFormatOverflow,
 	};
 
 	// if the format is null the color is reset and the iter does not advance
@@ -123,12 +128,12 @@ fn parseColor(it: *VariadicArgs) !Color {
 	if (format != Pallet256Int and format != RGBInt) return ResetColor;
 
 	if (format == Pallet256Int) {		
-		const colorVal = itCopy.nextBetter(u16) catch |err| switch (err) {
+		const colorVal = itCopy.nextBetter(u8) catch |err| switch (err) {
 			// coerces to 0
 			VariadicArgs.PeekErr.Empty => 0,
-			VariadicArgs.PeekErr.Overflow => 0,
 			// invalidates the entire sequence
 			VariadicArgs.PeekErr.InvalidCharacter => return error.Pallet256IntInvalidChar,
+			VariadicArgs.PeekErr.Overflow => return error.Pallet256IntOverflow,
 		};
 
 		// if the val is null the color resets and the iter does not advance
@@ -136,18 +141,18 @@ fn parseColor(it: *VariadicArgs) !Color {
 
 		// return valid color and advance the iter 2{format, color}
 		it.advance(2);
-		return .{.colorType = .pallet256, .val = @mod(val, 256)};
+		return .{.colorType = .pallet256, .val = val};
 	}
 	
 	if (format == RGBInt) {
-		var colors: [3]u16 = undefined;
+		var colors: [3]u8 = undefined;
 		for (0..colors.len) |i| {
-			const val = itCopy.nextBetter(u16) catch |err| switch (err) {
+			const val = itCopy.nextBetter(u8) catch |err| switch (err) {
 				// coerces to 0
 				VariadicArgs.PeekErr.Empty => 0,
-				VariadicArgs.PeekErr.Overflow => 0,
 				// invalidates the entire sequence
 				VariadicArgs.PeekErr.InvalidCharacter => return error.RGBIntInvalidChar,
+				VariadicArgs.PeekErr.Overflow => return error.RGBIntOverflow,
 			};
 
 			// if there are not at least 3 ints following, reset the color and do not advance the iter
@@ -156,10 +161,7 @@ fn parseColor(it: *VariadicArgs) !Color {
 
 		// return rgb and advance the iter 4{format, color, color, color}
 		it.advance(4);
-		var val: u24 = 0;
-		val += @as(u24, @mod(colors[0], 256)) << 16;
-		val += @as(u24, @mod(colors[1], 256)) << 8;
-		val += @as(u24, @mod(colors[2], 256));
+		const val: u24 = (@as(u24, colors[0]) << 16) + (@as(u24, colors[1]) << 8) + @as(u24, colors[2]);
 		return .{.colorType = .rgb, .val = val};
 	}
 	
@@ -193,6 +195,7 @@ fn argsPrint(args: []const u8) void {
 	_ = stdout.write("\x1b[m\n\n") catch unreachable;
 }
 
+// TODO testing of entire input space given updated constraints
 test parseColor {
 	const debugPrint = false;
 
@@ -220,8 +223,7 @@ test parseColor {
 		.{
 			.name = "overflow resets the color and does not advance the iter",
 			.str = "38;999999",
-			.parseColorExpect = ResetColor,
-			.remainingExpect = &[_]NextBetterRes{error.Overflow}
+			.parseColorExpect = error.ColorFormatOverflow,
 		},
 		.{
 			.name = "not 5 or 2 resets the color and does not advance",
@@ -259,14 +261,14 @@ test parseColor {
 			.parseColorExpect = .{.colorType = .pallet256, .val = 255},
 		},
 		.{
-			.name = "modulo pallet256 0",
-			.str = "38;5;256",
-			.parseColorExpect = .{.colorType = .pallet256},
-		},
-		.{
 			.name = "invalid char will invalidate the entire sequence",
 			.str = "38;5;255.",
 			.parseColorExpect = error.Pallet256IntInvalidChar,
+		},
+		.{
+			.name = "pallet256 overflow",
+			.str = "38;5;256",
+			.parseColorExpect = error.Pallet256IntOverflow,
 		},
 		
 		// rgb
@@ -304,14 +306,14 @@ test parseColor {
 			.parseColorExpect = .{.colorType = .rgb, .val = (255 << 16) + (255 << 8) + 255},
 		},
 		.{
-			.name = "modulo rgb 0,0,0",
+			.name = "rgb overflow 256,256,256",
 			.str = "38;2;256;256;256",
-			.parseColorExpect = .{.colorType = .rgb},
+			.parseColorExpect = error.RGBIntOverflow,
 		},
 		.{
-			.name = "overflow rgb 0,0,0",
+			.name = "rgb overflow 999999,0,0",
 			.str = "38;2;999999;0;0",
-			.parseColorExpect = .{.colorType = .rgb},
+			.parseColorExpect = error.RGBIntOverflow,
 		},
 		.{
 			.name = "invalid char will invalidate the entire sequence",
@@ -370,7 +372,7 @@ pub const Graphics = packed struct(u73) {
 	fg: Color = .{},
 	bg: Color = .{},
 
-	pub const ParseErr = error{InvalidCharacter, InsufficientLen, IncorrectFormat} || ParseColorErr;
+	pub const ParseErr = error{InsufficientLen, IncorrectFormat, InvalidCharacter, Overflow, UnknownIdentifier} || ParseColorErr;
 
 	pub fn parse(bytes: []const u8) ParseErr!Self {
 		if (bytes.len < Self.minLen) return error.InsufficientLen;
@@ -387,8 +389,7 @@ pub const Graphics = packed struct(u73) {
 				VariadicArgs.PeekErr.Empty => 0,
 				// invalidates the entire sequence
 				VariadicArgs.PeekErr.InvalidCharacter => return error.InvalidCharacter,
-				// causes the remaining to be dropped
-				VariadicArgs.PeekErr.Overflow => break,
+				VariadicArgs.PeekErr.Overflow => return error.Overflow,
 			};
 
 			switch (next orelse break) {
@@ -443,19 +444,12 @@ pub const Graphics = packed struct(u73) {
 				// 48;2;{r};{g};{b}m background rgb
 				BackgroundInt => out.bg = try parseColor(&it),
 
-				// causes the remaining to be dropped
-				else => break,
+				// invalidates the entire sequence
+				else => return error.UnknownIdentifier,
 			}
 		}
 
-		// all dropped must still be valid
-		while (true) {
-			_ = (it.nextBetter(u8) catch |err| switch (err) {
-				// invalidates the entire sequence
-				VariadicArgs.PeekErr.InvalidCharacter => return error.InvalidCharacter,
-				else => continue,
-			}) orelse break;
-		}
+		assert(it.nextBetter(u8) catch unreachable == null);
 
 		// no values were set, the default is to reset
 		if (out == Self{}) out.reset = .set;
@@ -485,134 +479,215 @@ pub const Graphics = packed struct(u73) {
 pub const ResetGraphics: Graphics = Graphics.default;
 
 test Graphics {
-	// default
-	try expect(try Graphics.parse(&Graphics.defaultStr) == Graphics.default);
+	// basic input space testing of one unit
+	// a unit is 1 byte for Opts, ResetOpts, Pallet8, & AixtermPallet8; but 2 bytes for Pallet256 FG/BG; and 4 bytes for RGB FG/BG
 
+	// valid basic input space:
 	// TODO also print
 	// every field parses and prints
 	// enum -> bytes -> parse(src) -> print (bytes) -> parse (out)
 	// ensures there is no data loss between conversions for all valid values
+	{
+		// default
+		try expect(try Graphics.parse(&Graphics.defaultStr) == Graphics.default);
 
-	const ParsePrintOptsTest = struct {
-		optEnum:     type,
-		expectedVal: Opt,
-	};
-	const parsePrintOptsTests = [_]ParsePrintOptsTest{
-		.{.optEnum = Opts, .expectedVal = .set},
-		.{.optEnum = ResetOpts, .expectedVal = .reset},
-	};
-	inline for (parsePrintOptsTests) |ppt| {
-		inline for (std.meta.fields(ppt.optEnum)) |f| {
-			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
-			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
+		// opts
+		// resetOpts
+		const ParsePrintOptsTest = struct {
+			optEnum:     type,
+			expectedVal: Opt,
+		};
+		const parsePrintOptsTests = [_]ParsePrintOptsTest{
+			.{.optEnum = Opts, .expectedVal = .set},
+			.{.optEnum = ResetOpts, .expectedVal = .reset},
+		};
+		inline for (parsePrintOptsTests) |ppt| {
+			inline for (std.meta.fields(ppt.optEnum)) |f| {
+				var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
+				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
 
-			// check correct field is set
-			var val = Graphics.parse(bytes) catch unreachable;
-			if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
-				try expect(val.bold == ppt.expectedVal);
-				try expect(val.faint == ppt.expectedVal);
+				// check correct field is set
+				var val = Graphics.parse(bytes) catch unreachable;
+				if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
+					try expect(val.bold == ppt.expectedVal);
+					try expect(val.faint == ppt.expectedVal);
+				}
+				else try expect(@field(val, f.name) == ppt.expectedVal);
+
+				// check every other field is unset
+				if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
+					val.bold = .unset;
+					val.faint = .unset;
+				}
+				else @field(val, f.name) = .unset;
+				try expect(val == Graphics{});
 			}
-			else try expect(@field(val, f.name) == ppt.expectedVal);
-
-			// check every other field is unset
-			if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
-				val.bold = .unset;
-				val.faint = .unset;
-			}
-			else @field(val, f.name) = .unset;
-			try expect(val == Graphics{});
 		}
-	}
 
-	const ParsePrintPallet8Test = struct {
-		palletEnum:        type,
-		expectedColorType: ColorType,
-		isFg:              bool,
-	};
+		// pallet8
+		// aixtermPallet8
+		const ParsePrintPallet8Test = struct {
+			palletEnum:        type,
+			expectedColorType: ColorType,
+			isFg:              bool,
+		};
+		const parsePrintPallet8Tests = [_]ParsePrintPallet8Test{
+			.{.palletEnum = Pallet8Fg, .expectedColorType = .pallet8, .isFg = true},
+			.{.palletEnum = Pallet8Bg, .expectedColorType = .pallet8, .isFg = false},
+			.{.palletEnum = AixtermPallet8Fg, .expectedColorType = .aixtermPallet8, .isFg = true},
+			.{.palletEnum = AixtermPallet8Bg, .expectedColorType = .aixtermPallet8, .isFg = false},
+		};
+		inline for (parsePrintPallet8Tests) |pppt| {
+			inline for (std.meta.fields(pppt.palletEnum)) |f| {
+				var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
+				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
 
-	const parsePrintPallet8Tests = [_]ParsePrintPallet8Test{
-		.{.palletEnum = Pallet8Fg, .expectedColorType = .pallet8, .isFg = true},
-		.{.palletEnum = Pallet8Bg, .expectedColorType = .pallet8, .isFg = false},
-		.{.palletEnum = AixtermPallet8Fg, .expectedColorType = .aixtermPallet8, .isFg = true},
-		.{.palletEnum = AixtermPallet8Bg, .expectedColorType = .aixtermPallet8, .isFg = false},
-	};
-	inline for (parsePrintPallet8Tests) |pppt| {
-		inline for (std.meta.fields(pppt.palletEnum)) |f| {
-			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
-			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
+				// check correct field is set
+				var val = Graphics.parse(bytes) catch unreachable;
+				if (pppt.isFg) {
+					try expect(val.fg.colorType == pppt.expectedColorType);
+					try expect(val.fg.val == f.value);
+				}
+				else {
+					try expect(val.bg.colorType == pppt.expectedColorType);
+					try expect(val.bg.val == f.value);
+				}
 
-			// check correct field is set
-			var val = Graphics.parse(bytes) catch unreachable;
-			if (pppt.isFg) {
-				try expect(val.fg.colorType == pppt.expectedColorType);
-				try expect(val.fg.val == f.value);
+				// check every other field is unset
+				if (pppt.isFg) val.fg = .{} else val.bg = .{};
+				try expect(val == Graphics{});
 			}
-			else {
-				try expect(val.bg.colorType == pppt.expectedColorType);
-				try expect(val.bg.val == f.value);
-			}
-
-			// check every other field is unset
-			if (pppt.isFg) val.fg = .{} else val.bg = .{};
-			try expect(val == Graphics{});
 		}
-	}
-	
-	for (0..std.math.maxInt(u8)+1) |i| {
-		for ([2]u8{ForegroundInt, BackgroundInt}) |bgFg| {
-			var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen + 5]u8 = undefined;
-			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d};5;{d}m", .{bgFg, i}) catch unreachable;
 
-			// check correct field is set
-			var val = Graphics.parse(bytes) catch unreachable;
-			if (bgFg == ForegroundInt) {
-				try expect(val.fg.colorType == .pallet256);
-				try expect(val.fg.val == i);
-			}
-			else {
-				try expect(val.bg.colorType == .pallet256);
-				try expect(val.bg.val == i);
-			}
-
-			// check every other field is unset
-			if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
-			try expect(val == Graphics{});
-		}
-	}
-
-	// bufPrint is called at each step instead of once in the innermost loop for speed, this is ~2.5x faster
-	for ([2]u8{ForegroundInt, BackgroundInt}) |bgFg| {
-		var buf: [Graphics.defaultStr.len + 3 + 2 + (3 * consts.u8MaxStrLen) + 2 + 1]u8 = undefined;
-		buf[0] = '\x1b';
-		buf[1] = '[';
-		const bgFgLen = (std.fmt.bufPrint(buf[2..], "{d};2;", .{bgFg}) catch unreachable).len + 2;
-
+		// palllet256
 		for (0..std.math.maxInt(u8)+1) |i| {
-			const oneLen = (std.fmt.bufPrint(buf[bgFgLen..], "{d};", .{i}) catch unreachable).len;
+			for ([2]u8{ForegroundInt, BackgroundInt}) |bgFg| {
+				var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen + 5]u8 = undefined;
+				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d};5;{d}m", .{bgFg, i}) catch unreachable;
 
-			for (0..std.math.maxInt(u8)+1) |j| {
-				const twoLen = (std.fmt.bufPrint(buf[bgFgLen + oneLen..], "{d};", .{j}) catch unreachable).len;
-	
-				for (0..std.math.maxInt(u8)+1) |k| {
-					const threeLen = (std.fmt.bufPrint(buf[bgFgLen + oneLen + twoLen..], "{d}m", .{k}) catch unreachable).len;
-					const expectedVal = (@as(u24, @intCast(i)) << 16) + (@as(u24, @intCast(j)) << 8) + @as(u24, @intCast(k));
+				// check correct field is set
+				var val = Graphics.parse(bytes) catch unreachable;
+				if (bgFg == ForegroundInt) {
+					try expect(val.fg.colorType == .pallet256);
+					try expect(val.fg.val == i);
+				}
+				else {
+					try expect(val.bg.colorType == .pallet256);
+					try expect(val.bg.val == i);
+				}
 
-					// check correct field is set
-					var val = Graphics.parse(buf[0..bgFgLen+oneLen+twoLen+threeLen]) catch unreachable;
-					if (bgFg == ForegroundInt) {
-						try expect(val.fg.colorType == .rgb);
-						try expect(val.fg.val == expectedVal);
+				// check every other field is unset
+				if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
+				try expect(val == Graphics{});
+			}
+		}
+
+		// rgb
+		// bufPrint is called at each step instead of once in the innermost loop for speed; this is ~2.5x faster
+		for ([2]u8{ForegroundInt, BackgroundInt}) |bgFg| {
+			var buf: [Graphics.defaultStr.len + 3 + 2 + (3 * consts.u8MaxStrLen) + 2 + 1]u8 = undefined;
+			buf[0] = '\x1b';
+			buf[1] = '[';
+			const bgFgLen = (std.fmt.bufPrint(buf[2..], "{d};2;", .{bgFg}) catch unreachable).len + 2;
+
+			for (0..std.math.maxInt(u8)+1) |i| {
+				const oneLen = (std.fmt.bufPrint(buf[bgFgLen..], "{d};", .{i}) catch unreachable).len;
+
+				for (0..std.math.maxInt(u8)+1) |j| {
+					const twoLen = (std.fmt.bufPrint(buf[bgFgLen + oneLen..], "{d};", .{j}) catch unreachable).len;
+		
+					for (0..std.math.maxInt(u8)+1) |k| {
+						const threeLen = (std.fmt.bufPrint(buf[bgFgLen + oneLen + twoLen..], "{d}m", .{k}) catch unreachable).len;
+						const expectedVal = (@as(u24, @intCast(i)) << 16) + (@as(u24, @intCast(j)) << 8) + @as(u24, @intCast(k));
+
+						// check correct field is set
+						var val = Graphics.parse(buf[0..bgFgLen+oneLen+twoLen+threeLen]) catch unreachable;
+						if (bgFg == ForegroundInt) {
+							try expect(val.fg.colorType == .rgb);
+							try expect(val.fg.val == expectedVal);
+						}
+						else {
+							try expect(val.bg.colorType == .rgb);
+							try expect(val.bg.val == expectedVal);
+						}
+
+						// check every other field is unset
+						if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
+						try expect(val == Graphics{});
 					}
-					else {
-						try expect(val.bg.colorType == .rgb);
-						try expect(val.bg.val == expectedVal);
-					}
-
-					// check every other field is unset
-					if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
-					try expect(val == Graphics{});
 				}
 			}
 		}
+	}
+
+	// invalid basic input space:
+	// unknown identifiers invalidate the entire sequence
+	{
+		const count = std.meta.fields(Opts).len +
+							std.meta.fields(ResetOpts).len +
+							std.meta.fields(Pallet8Fg).len +
+							std.meta.fields(Pallet8Bg).len +
+							std.meta.fields(AixtermPallet8Fg).len +
+							std.meta.fields(AixtermPallet8Bg).len +
+							3; // zero, fg, and bg
+		var knownVals: [count]u8 = undefined;
+		var index: usize = 0;
+		const types = [6]type{Opts, ResetOpts, Pallet8Fg, Pallet8Bg, AixtermPallet8Fg, AixtermPallet8Bg};
+		inline for (types) |T| {
+			inline for (std.meta.fields(T)) |f| {
+				knownVals[index] = f.value;
+				index += 1;
+			}
+		}
+		knownVals[index] = 0;
+		knownVals[index+1] = ForegroundInt;
+		knownVals[index+2] = BackgroundInt;
+
+		var buf: [Graphics.defaultStr.len + consts.u8MaxStrLen]u8 = undefined;
+		for (0..std.math.maxInt(u8)+1) |i| {
+			if (std.mem.indexOfScalar(u8, &knownVals, @truncate(i)) != null) continue;
+			const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{i}) catch unreachable;
+			try expect(Graphics.parse(bytes) == error.UnknownIdentifier);
+		}
+	}
+
+	// combinatory input space testing of multiple units
+
+	// ability to reset faint & bold and then set each individually and independently
+	{
+		var buf: [Graphics.defaultStr.len + (consts.u8MaxStrLen * 2) + 1]u8 = undefined;
+		var bytes: []const u8 = undefined;
+
+		// faint
+		bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{@intFromEnum(Opts.faint)}) catch unreachable;
+		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .set});
+
+		// bold
+		bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{@intFromEnum(Opts.bold)}) catch unreachable;
+		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.bold = .set});
+
+		// reset bold and faint == rbf
+		bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{@intFromEnum(ResetOpts.boldAndFaint)}) catch unreachable;
+		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .reset, .bold = .reset});
+
+		// rbf & faint
+		bytes = std.fmt.bufPrint(&buf, "\x1b[{d};{d}m", .{@intFromEnum(ResetOpts.boldAndFaint), @intFromEnum(Opts.faint)}) catch unreachable;
+		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .set, .bold = .reset});
+
+		// rbf & bold
+		bytes = std.fmt.bufPrint(&buf, "\x1b[{d};{d}m", .{@intFromEnum(ResetOpts.boldAndFaint), @intFromEnum(Opts.bold)}) catch unreachable;
+		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .reset, .bold = .set});
+	}
+
+	// TODO color overwriting
+	{
+	}
+
+	// TODO test reset, both 0 and empty, in the middle of args
+	{
+	}
+
+	// TODO set, reset, set
+	{
 	}
 }
