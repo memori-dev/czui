@@ -81,18 +81,18 @@ pub const AixtermPallet8Bg = enum(u8) {
 	white   = 107,
 };
 
-pub const ResetOpt = enum(u1) { unset = 0, set = 1 };
+pub const UnsetSet = enum(u1) { unset = 0, set = 1 };
 
-pub const Opt = enum(u2) { unset = 0, set = 1, reset = 2 };
+pub const UnsetSetReset = enum(u2) { unset = 0, set = 1, reset = 2 };
 
 pub const ColorType = enum(u3) { unset = 0, reset = 1, pallet8 = 2, aixtermPallet8 = 3, pallet256 = 4, rgb = 5 };
 
 pub const Color = packed struct(u27) {
-	colorType: ColorType = .unset,
-	val:       u24       = 0,
+	type: ColorType = .unset,
+	val:  u24       = 0,
 };
 
-const ResetColor: Color = .{.colorType = .reset};
+const ResetColor: Color = .{.type = .reset};
 
 const ParseColorErr = error {
 	ColorFormatInvalidChar,
@@ -112,7 +112,7 @@ fn parseColor(it: *VariadicArgs) !Color {
 	var itCopy = it.*;
 
 	// parse format
-	const formatOpt = itCopy.nextBetter(u3) catch |err| switch (err) {
+	const formatOpt = itCopy.nextBetter(u8) catch |err| switch (err) {
 			// it likely coerces to a color reset, but
 			// empty will coerce to 0 which performs a full reset and the iter does not advance
 			VariadicArgs.PeekErr.Empty => return ResetColor,
@@ -141,7 +141,7 @@ fn parseColor(it: *VariadicArgs) !Color {
 
 		// return valid color and advance the iter 2{format, color}
 		it.advance(2);
-		return .{.colorType = .pallet256, .val = val};
+		return .{.type = .pallet256, .val = val};
 	}
 	
 	if (format == RGBInt) {
@@ -162,7 +162,7 @@ fn parseColor(it: *VariadicArgs) !Color {
 		// return rgb and advance the iter 4{format, color, color, color}
 		it.advance(4);
 		const val: u24 = (@as(u24, colors[0]) << 16) + (@as(u24, colors[1]) << 8) + @as(u24, colors[2]);
-		return .{.colorType = .rgb, .val = val};
+		return .{.type = .rgb, .val = val};
 	}
 	
 	unreachable;
@@ -199,7 +199,7 @@ fn argsPrint(args: []const u8) void {
 test parseColor {
 	const debugPrint = false;
 
-	const NextBetterRes = VariadicArgs.PeekErr!?u16;
+	const NextBetterRes = VariadicArgs.PeekErr!?u8;
 	const testFormat = struct {
 		name:             []const u8,
 		str:              []const u8,
@@ -248,17 +248,17 @@ test parseColor {
 		.{
 			.name = "empty coerces to 0, pallet256 0 (i think)",
 			.str = "38;5;",
-			.parseColorExpect = .{.colorType = .pallet256},
+			.parseColorExpect = .{.type = .pallet256},
 		},
 		.{
 			.name = "pallet256 0",
 			.str = "38;5;0",
-			.parseColorExpect = .{.colorType = .pallet256},
+			.parseColorExpect = .{.type = .pallet256},
 		},
 		.{
 			.name = "pallet256 255",
 			.str = "38;5;255",
-			.parseColorExpect = .{.colorType = .pallet256, .val = 255},
+			.parseColorExpect = .{.type = .pallet256, .val = 255},
 		},
 		.{
 			.name = "invalid char will invalidate the entire sequence",
@@ -293,17 +293,17 @@ test parseColor {
 		.{
 			.name = "empty coerces to zero, returns rgb 0,0,0 (I think)",
 			.str = "38;2;;;",
-			.parseColorExpect = .{.colorType = .rgb},
+			.parseColorExpect = .{.type = .rgb},
 		},
 		.{
 			.name = "rgb 0,0,0",
 			.str = "38;2;0;0;0",
-			.parseColorExpect = .{.colorType = .rgb},
+			.parseColorExpect = .{.type = .rgb},
 		},
 		.{
 			.name = "rgb 255,255,255",
 			.str = "38;2;255;255;255",
-			.parseColorExpect = .{.colorType = .rgb, .val = (255 << 16) + (255 << 8) + 255},
+			.parseColorExpect = .{.type = .rgb, .val = (255 << 16) + (255 << 8) + 255},
 		},
 		.{
 			.name = "rgb overflow 256,256,256",
@@ -338,37 +338,37 @@ test parseColor {
 		// remaining nextBetter
 		if (t.remainingExpect) |re| {
 			for (re) |r| {
-				if (iter.nextBetter(u16)) |res| try expect(res == try r)
+				if (iter.nextBetter(u8)) |res| try expect(res == try r)
 				else |err| try expect(err == r);
 			}
 
 			// last nextBetter should return null
-			try expect(try iter.nextBetter(u16) == null);
+			try expect(try iter.nextBetter(u8) == null);
 		}
 	}
 }
 
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
-pub const Graphics = packed struct(u73) {
+pub const Graphics = packed struct(u72) {
 	const Self = @This();
 	const fnName:     [1]u8 = .{'m'};
 	const default:    Self  = .{.reset = .set};
 	const defaultStr: [3]u8 = consts.CSI ++ Self.fnName;
 	const minLen:     usize = defaultStr.len;
 
-	reset: ResetOpt = .unset, // 0 (default)
+	reset: UnsetSet = .unset, // 0 (default)
 
-	bold:            Opt = .unset, // set 1, reset 22
-	faint:           Opt = .unset, // set 2, reset 22
-	italic:          Opt = .unset, // set 3, reset 23
-	underline:       Opt = .unset, // set 4, reset 24
-	blinking:        Opt = .unset, // set 5, reset 25
-	inverse:         Opt = .unset, // set 7, reset 27
-	hidden:          Opt = .unset, // set 8, reset 28
-	strikethrough:   Opt = .unset, // set 9, reset 29
-	doubleUnderline: Opt = .unset, // set 21
+	bold:            UnsetSetReset = .unset, // set 1, reset 22
+	faint:           UnsetSetReset = .unset, // set 2, reset 22
+	italic:          UnsetSetReset = .unset, // set 3, reset 23
+	underline:       UnsetSetReset = .unset, // set 4, reset 24
+	blinking:        UnsetSetReset = .unset, // set 5, reset 25
+	inverse:         UnsetSetReset = .unset, // set 7, reset 27
+	hidden:          UnsetSetReset = .unset, // set 8, reset 28
+	strikethrough:   UnsetSetReset = .unset, // set 9, reset 29
+	doubleUnderline: UnsetSet = .unset, // set 21
 
-	// color can only be set once and will overwrite regardless of colorType
+	// color can only be set once and will overwrite regardless of type
 	fg: Color = .{},
 	bg: Color = .{},
 
@@ -420,12 +420,12 @@ pub const Graphics = packed struct(u73) {
 				29 => out.strikethrough   = .reset,
 
 				// pallet8
-				30...37, 39 => |val| out.fg = .{.colorType = .pallet8, .val = val},
-				40...47, 49 => |val| out.bg = .{.colorType = .pallet8, .val = val},
+				30...37, 39 => |val| out.fg = .{.type = .pallet8, .val = val},
+				40...47, 49 => |val| out.bg = .{.type = .pallet8, .val = val},
 
 				// aixterm bright/bold pallet8
-				90...97   => |val| out.fg = .{.colorType = .aixtermPallet8, .val = val},
-				100...107 => |val| out.bg = .{.colorType = .aixtermPallet8, .val = val},
+				90...97   => |val| out.fg = .{.type = .aixtermPallet8, .val = val},
+				100...107 => |val| out.bg = .{.type = .aixtermPallet8, .val = val},
 
 				// 38;5;{color}m     foreground pallet256
 				// 38;2;{r};{g};{b}m foreground rgb
@@ -457,49 +457,167 @@ pub const Graphics = packed struct(u73) {
 		return out;
 	}
 
-	//pub fn apply(self: @This(), writer: anytype) !usize {
-		//return writer.write(self.val[0..self.len]);
-	//}
+	// CSI   ->  2
+	// reset ->  1                -> ";"
+	// opts  -> 26 == (9 * 2) + 8 -> "21;22;23;...29"
+	// fg    -> 16                -> "38;2;255;255;255"
+	// bg    -> 16                -> "48;2;255;255;255"
+	pub const colorMaxPrintLen: usize = 16;
+	// fn    ->  1                -> 'm'
+	pub const maxPrintLen: usize = consts.CSI.len+1+26+(Self.colorMaxPrintLen*2)+Self.fnName.len;
 
-	//pub fn print(self: @This(), writer: anytype, comptime format: []const u8, args: anytype) !void {
-		//_ = try writer.write(self.val[0..self.len]);
-		//try writer.print(format, args);
-		//_ = try writer.write(modeReset);
-	//}
-	
-	//pub fn write(self: @This(), writer: anytype, bytes: []const u8) !usize {
-		//var sum: usize = 0;
-		//sum += try writer.write(self.val[0..self.len]);
-		//sum += try writer.write(bytes);
-		//sum += try writer.write(modeReset);
-		//return sum;
-	//}
+	pub fn print(self: @This()) struct{[Self.maxPrintLen]u8, usize} {
+		var out: [Self.maxPrintLen]u8 = undefined;
+		std.mem.copyForwards(u8, &out, &consts.CSI);
+
+		var index: usize = consts.CSI.len;
+
+		// reset must be set first
+		if (self.reset == .set) {
+			out[index] = ';';
+			index += 1;
+		}
+
+		// bold and faint require special handling due to both being bound to one reset code
+		// TODO generate strings from Enums and reference that
+		if (self.bold == .reset or self.faint == .reset) {
+			std.mem.copyForwards(u8, out[index..], "22;");
+			index += 3;
+		}
+		if (self.bold == .set) {
+			std.mem.copyForwards(u8, out[index..], "1;");
+			index += 2;
+		}
+		if (self.faint == .set) {
+			std.mem.copyForwards(u8, out[index..], "2;");
+			index += 2;
+		}
+
+		if (self.italic != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.italic == .set) @intFromEnum(Opts.italic) else @intFromEnum(ResetOpts.italic)}
+			) catch unreachable).len;
+		}
+		if (self.underline != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.underline == .set) @intFromEnum(Opts.underline) else @intFromEnum(ResetOpts.underline)}
+			) catch unreachable).len;
+		}
+		if (self.blinking != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.blinking == .set) @intFromEnum(Opts.blinking) else @intFromEnum(ResetOpts.blinking)}
+			) catch unreachable).len;
+		}
+		if (self.inverse != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.inverse == .set) @intFromEnum(Opts.inverse) else @intFromEnum(ResetOpts.inverse)}
+			) catch unreachable).len;
+		}
+		if (self.hidden != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.hidden == .set) @intFromEnum(Opts.hidden) else @intFromEnum(ResetOpts.hidden)}
+			) catch unreachable).len;
+		}
+		if (self.strikethrough != .unset) {
+			index += (std.fmt.bufPrint(
+				out[index..],
+				"{d};",
+				.{if (self.strikethrough == .set) @intFromEnum(Opts.strikethrough) else @intFromEnum(ResetOpts.strikethrough)}
+			) catch unreachable).len;
+		}
+		if (self.doubleUnderline == .set) {
+			index += (std.fmt.bufPrint(out[index..], "{d};", .{@intFromEnum(Opts.doubleUnderline)}) catch unreachable).len;
+		}
+
+		inline for (std.meta.fields(Self)) |f| {
+			if (f.type != Color) continue;
+
+			const fgBgInt = if (std.mem.eql(u8, f.name, "fg")) ForegroundInt else BackgroundInt;
+
+			switch (@field(self, f.name).type) {
+				// TODO generate the string from Pallet8Fg.default and reference that
+				.reset => {
+					std.mem.copyForwards(u8, out[index..], "39;");
+					index += 3;
+				},
+				// TODO generate the strings
+				.pallet8, .aixtermPallet8 => {
+					index += (std.fmt.bufPrint(out[index..], "{d};", .{@field(self, f.name).val}) catch unreachable).len;
+				},
+				.pallet256 => {
+					index += (std.fmt.bufPrint(out[index..], "{d};5;{d};", .{fgBgInt, @field(self, f.name).val}) catch unreachable).len;
+				},
+				.rgb => {
+					index += (std.fmt.bufPrint(
+						out[index..],
+						"{d};2;{d};{d};{d}",
+						.{fgBgInt, (@field(self, f.name).val >> 16) & 255, (@field(self, f.name).val >> 8) & 255, @field(self, f.name).val & 255}
+					) catch unreachable).len;
+				},
+				.unset => {},
+			}
+		}
+
+		if (out[index-1] == ';') out[index-1] = 'm'
+		else {
+			out[index] = 'm';
+			index += 1;
+		}
+
+		return .{out, index};
+	}
 };
 
 pub const ResetGraphics: Graphics = Graphics.default;
+
+// parse(bytes) src -> print(src) outBytes, outLen -> parse(outBytes) out
+fn testBytesParsePrintParse(bytes: []const u8) !void {
+	const src = Graphics.parse(bytes) catch unreachable;
+
+	// print(src) outBytes, outLen
+	const outBytes, const outLen = src.print();
+	try expect(std.mem.eql(u8, bytes, outBytes[0..outLen]));
+
+	// parse(outBytes) out
+	const out = Graphics.parse(outBytes[0..outLen]) catch unreachable;
+	try expect(src == out);
+}
 
 test Graphics {
 	// basic input space testing of one unit
 	// a unit is 1 byte for Opts, ResetOpts, Pallet8, & AixtermPallet8; but 2 bytes for Pallet256 FG/BG; and 4 bytes for RGB FG/BG
 
 	// valid basic input space:
-	// TODO also print
 	// every field parses and prints
-	// enum -> bytes -> parse(src) -> print (bytes) -> parse (out)
+	// enum -> bytes -> parse(bytes) src -> print(src) outBytes, outLen -> parse(outBytes) out
 	// ensures there is no data loss between conversions for all valid values
 	{
 		// default
-		try expect(try Graphics.parse(&Graphics.defaultStr) == Graphics.default);
+		{
+			const bytes = &Graphics.defaultStr;
+			try expect(Graphics.parse(bytes) catch unreachable == Graphics.default);
+			try testBytesParsePrintParse(bytes);
+		}
 
 		// opts
 		// resetOpts
 		const ParsePrintOptsTest = struct {
 			optEnum:     type,
-			expectedVal: Opt,
+			expectedSet: bool,
 		};
 		const parsePrintOptsTests = [_]ParsePrintOptsTest{
-			.{.optEnum = Opts, .expectedVal = .set},
-			.{.optEnum = ResetOpts, .expectedVal = .reset},
+			.{.optEnum = Opts, .expectedSet = true},
+			.{.optEnum = ResetOpts, .expectedSet = false},
 		};
 		inline for (parsePrintOptsTests) |ppt| {
 			inline for (std.meta.fields(ppt.optEnum)) |f| {
@@ -507,20 +625,22 @@ test Graphics {
 				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
 
 				// check correct field is set
-				var val = Graphics.parse(bytes) catch unreachable;
+				var src = Graphics.parse(bytes) catch unreachable;
 				if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
-					try expect(val.bold == ppt.expectedVal);
-					try expect(val.faint == ppt.expectedVal);
+					try expect(src.bold == if (ppt.expectedSet) .set else .reset);
+					try expect(src.faint == if (ppt.expectedSet) .set else .reset);
 				}
-				else try expect(@field(val, f.name) == ppt.expectedVal);
-
+				else try expect(@field(src, f.name) == if (ppt.expectedSet) .set else .reset);
+				
 				// check every other field is unset
 				if (f.value == @intFromEnum(ResetOpts.boldAndFaint)) {
-					val.bold = .unset;
-					val.faint = .unset;
+					src.bold = .unset;
+					src.faint = .unset;
 				}
-				else @field(val, f.name) = .unset;
-				try expect(val == Graphics{});
+				else @field(src, f.name) = .unset;
+				try expect(src == Graphics{});					
+
+				try testBytesParsePrintParse(bytes);
 			}
 		}
 
@@ -543,19 +663,21 @@ test Graphics {
 				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{f.value}) catch unreachable;
 
 				// check correct field is set
-				var val = Graphics.parse(bytes) catch unreachable;
+				var src = Graphics.parse(bytes) catch unreachable;
 				if (pppt.isFg) {
-					try expect(val.fg.colorType == pppt.expectedColorType);
-					try expect(val.fg.val == f.value);
+					try expect(src.fg.type == pppt.expectedColorType);
+					try expect(src.fg.val == f.value);
 				}
 				else {
-					try expect(val.bg.colorType == pppt.expectedColorType);
-					try expect(val.bg.val == f.value);
+					try expect(src.bg.type == pppt.expectedColorType);
+					try expect(src.bg.val == f.value);
 				}
 
 				// check every other field is unset
-				if (pppt.isFg) val.fg = .{} else val.bg = .{};
-				try expect(val == Graphics{});
+				if (pppt.isFg) src.fg = .{} else src.bg = .{};
+				try expect(src == Graphics{});
+
+				try testBytesParsePrintParse(bytes);
 			}
 		}
 
@@ -566,19 +688,21 @@ test Graphics {
 				const bytes = std.fmt.bufPrint(&buf, "\x1b[{d};5;{d}m", .{bgFg, i}) catch unreachable;
 
 				// check correct field is set
-				var val = Graphics.parse(bytes) catch unreachable;
+				var src = Graphics.parse(bytes) catch unreachable;
 				if (bgFg == ForegroundInt) {
-					try expect(val.fg.colorType == .pallet256);
-					try expect(val.fg.val == i);
+					try expect(src.fg.type == .pallet256);
+					try expect(src.fg.val == i);
 				}
 				else {
-					try expect(val.bg.colorType == .pallet256);
-					try expect(val.bg.val == i);
+					try expect(src.bg.type == .pallet256);
+					try expect(src.bg.val == i);
 				}
 
 				// check every other field is unset
-				if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
-				try expect(val == Graphics{});
+				if (bgFg == ForegroundInt) src.fg = .{} else src.bg = .{};
+				try expect(src == Graphics{});
+
+				try testBytesParsePrintParse(bytes);
 			}
 		}
 
@@ -599,21 +723,24 @@ test Graphics {
 					for (0..std.math.maxInt(u8)+1) |k| {
 						const threeLen = (std.fmt.bufPrint(buf[bgFgLen + oneLen + twoLen..], "{d}m", .{k}) catch unreachable).len;
 						const expectedVal = (@as(u24, @intCast(i)) << 16) + (@as(u24, @intCast(j)) << 8) + @as(u24, @intCast(k));
+						const bytes = buf[0..bgFgLen+oneLen+twoLen+threeLen];
 
 						// check correct field is set
-						var val = Graphics.parse(buf[0..bgFgLen+oneLen+twoLen+threeLen]) catch unreachable;
+						var src = Graphics.parse(bytes) catch unreachable;
 						if (bgFg == ForegroundInt) {
-							try expect(val.fg.colorType == .rgb);
-							try expect(val.fg.val == expectedVal);
+							try expect(src.fg.type == .rgb);
+							try expect(src.fg.val == expectedVal);
 						}
 						else {
-							try expect(val.bg.colorType == .rgb);
-							try expect(val.bg.val == expectedVal);
+							try expect(src.bg.type == .rgb);
+							try expect(src.bg.val == expectedVal);
 						}
 
 						// check every other field is unset
-						if (bgFg == ForegroundInt) val.fg = .{} else val.bg = .{};
-						try expect(val == Graphics{});
+						if (bgFg == ForegroundInt) src.fg = .{} else src.bg = .{};
+						try expect(src == Graphics{});
+
+						try testBytesParsePrintParse(bytes);
 					}
 				}
 			}
@@ -669,18 +796,106 @@ test Graphics {
 		// reset bold and faint == rbf
 		bytes = std.fmt.bufPrint(&buf, "\x1b[{d}m", .{@intFromEnum(ResetOpts.boldAndFaint)}) catch unreachable;
 		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .reset, .bold = .reset});
+		try testBytesParsePrintParse(bytes);
 
 		// rbf & faint
 		bytes = std.fmt.bufPrint(&buf, "\x1b[{d};{d}m", .{@intFromEnum(ResetOpts.boldAndFaint), @intFromEnum(Opts.faint)}) catch unreachable;
 		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .set, .bold = .reset});
+		try testBytesParsePrintParse(bytes);
 
 		// rbf & bold
 		bytes = std.fmt.bufPrint(&buf, "\x1b[{d};{d}m", .{@intFromEnum(ResetOpts.boldAndFaint), @intFromEnum(Opts.bold)}) catch unreachable;
 		try expect(Graphics.parse(bytes) catch unreachable == Graphics{.faint = .reset, .bold = .set});
+		try testBytesParsePrintParse(bytes);
 	}
 
-	// TODO color overwriting
+	// color overwriting
 	{
+		const ColorTest = struct {
+			argsStr: []const u8,
+			color:   Color,
+		};
+
+		const ColorTestSet = struct {
+			isFg:  bool,
+			tests: []const ColorTest,			
+		};
+
+		const fgTestSet = ColorTestSet{
+			.isFg = true,
+			.tests = &[_]ColorTest{
+				.{.argsStr = "30",         .color = .{.type = .pallet8,        .val = 30}},
+				.{.argsStr = "90",         .color = .{.type = .aixtermPallet8, .val = 90}},
+				.{.argsStr = "38;5;1",     .color = .{.type = .pallet256,      .val = 1}},
+				.{.argsStr = "38;2;1;1;1", .color = .{.type = .rgb,            .val = (1 << 16) + (1 << 8) + 1}},
+				.{.argsStr = "38",         .color = .{.type = .reset}},
+			},
+		};
+
+		const bgTestSet = ColorTestSet{
+			.isFg = false,
+			.tests = &[_]ColorTest{
+				.{.argsStr = "40",         .color = .{.type = .pallet8,        .val = 40}},
+				.{.argsStr = "100",        .color = .{.type = .aixtermPallet8, .val = 100}},
+				.{.argsStr = "48;5;1",     .color = .{.type = .pallet256,      .val = 1}},
+				.{.argsStr = "48;2;1;1;1", .color = .{.type = .rgb,            .val = (1 << 16) + (1 << 8) + 1}},
+				.{.argsStr = "48",         .color = .{.type = .reset}},
+			},
+		};
+
+		for ([2]ColorTestSet{fgTestSet, bgTestSet}) |cts| {
+			for (cts.tests) |c1| {
+				for (cts.tests) |c2| {
+					var buf: [Graphics.minLen + (Graphics.colorMaxPrintLen*2) + 2]u8 = undefined;
+					std.mem.copyForwards(u8, &buf, &consts.CSI);
+					var len: usize = 2;
+					std.mem.copyForwards(u8, buf[len..], c1.argsStr);
+					len += c1.argsStr.len;
+					buf[len] = ';';
+					len += 1;
+					std.mem.copyForwards(u8, buf[len..], c2.argsStr);
+					len += c2.argsStr.len;
+					buf[len] = 'm';
+					len += 1;
+
+					const bytes = buf[0..len];
+					const src = Graphics.parse(bytes) catch unreachable;
+					if (cts.isFg) {
+						try expect(src.fg == c2.color);
+						try expect(src.bg.type == .unset);
+					} else {
+						try expect(src.bg == c2.color);
+						try expect(src.fg.type == .unset);
+					}
+				}
+			}			
+		}
+
+		// test all possibilities in a row
+		for ([2]ColorTestSet{fgTestSet, bgTestSet}) |cts| {
+			var buf: [Graphics.minLen + 32]u8 = undefined;
+			std.mem.copyForwards(u8, &buf, &consts.CSI);
+			var len: usize = 2;
+			
+			for (cts.tests) |t| {
+				std.mem.copyForwards(u8, buf[len..], t.argsStr);
+				len += t.argsStr.len;
+				buf[len] = 'm';
+				len += 1;
+
+				const bytes = buf[0..len];
+				const src = Graphics.parse(bytes) catch unreachable;
+				if (cts.isFg) {
+					try expect(src.fg == t.color);
+					try expect(src.bg.type == .unset);
+				} else {
+					try expect(src.bg == t.color);
+					try expect(src.fg.type == .unset);
+				}
+
+				buf[len-1] = ';';
+			}
+		}
 	}
 
 	// TODO test reset, both 0 and empty, in the middle of args
