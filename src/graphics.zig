@@ -293,7 +293,7 @@ test parseColor {
 		.{
 			.name = "empty coerces to zero, returns rgb 0,0,0 (I think)",
 			.str = "38;2;;;",
-			.parseColorExpect = .{.type = .rgb},
+			.parseColorExpect = .{.type = .rgb, .val = 0},
 		},
 		.{
 			.name = "rgb 0,0,0",
@@ -811,19 +811,19 @@ test Graphics {
 
 	// color overwriting
 	{
-		const ColorTest = struct {
+		const Test = struct {
 			argsStr: []const u8,
 			color:   Color,
 		};
 
-		const ColorTestSet = struct {
+		const TestSet = struct {
 			isFg:  bool,
-			tests: []const ColorTest,			
+			tests: []const Test,
 		};
 
-		const fgTestSet = ColorTestSet{
+		const fgTestSet = TestSet{
 			.isFg = true,
-			.tests = &[_]ColorTest{
+			.tests = &[_]Test{
 				.{.argsStr = "30",         .color = .{.type = .pallet8,        .val = 30}},
 				.{.argsStr = "90",         .color = .{.type = .aixtermPallet8, .val = 90}},
 				.{.argsStr = "38;5;1",     .color = .{.type = .pallet256,      .val = 1}},
@@ -832,9 +832,9 @@ test Graphics {
 			},
 		};
 
-		const bgTestSet = ColorTestSet{
+		const bgTestSet = TestSet{
 			.isFg = false,
-			.tests = &[_]ColorTest{
+			.tests = &[_]Test{
 				.{.argsStr = "40",         .color = .{.type = .pallet8,        .val = 40}},
 				.{.argsStr = "100",        .color = .{.type = .aixtermPallet8, .val = 100}},
 				.{.argsStr = "48;5;1",     .color = .{.type = .pallet256,      .val = 1}},
@@ -843,9 +843,9 @@ test Graphics {
 			},
 		};
 
-		for ([2]ColorTestSet{fgTestSet, bgTestSet}) |cts| {
-			for (cts.tests) |c1| {
-				for (cts.tests) |c2| {
+		for ([2]TestSet{fgTestSet, bgTestSet}) |ts| {
+			for (ts.tests) |c1| {
+				for (ts.tests) |c2| {
 					var buf: [Graphics.minLen + (Graphics.colorMaxPrintLen*2) + 2]u8 = undefined;
 					std.mem.copyForwards(u8, &buf, &consts.CSI);
 					var len: usize = 2;
@@ -860,7 +860,7 @@ test Graphics {
 
 					const bytes = buf[0..len];
 					const src = Graphics.parse(bytes) catch unreachable;
-					if (cts.isFg) {
+					if (ts.isFg) {
 						try expect(src.fg == c2.color);
 						try expect(src.bg.type == .unset);
 					} else {
@@ -872,12 +872,12 @@ test Graphics {
 		}
 
 		// test all possibilities in a row
-		for ([2]ColorTestSet{fgTestSet, bgTestSet}) |cts| {
+		for ([2]TestSet{fgTestSet, bgTestSet}) |ts| {
 			var buf: [Graphics.minLen + 32]u8 = undefined;
 			std.mem.copyForwards(u8, &buf, &consts.CSI);
 			var len: usize = 2;
 			
-			for (cts.tests) |t| {
+			for (ts.tests) |t| {
 				std.mem.copyForwards(u8, buf[len..], t.argsStr);
 				len += t.argsStr.len;
 				buf[len] = 'm';
@@ -885,7 +885,7 @@ test Graphics {
 
 				const bytes = buf[0..len];
 				const src = Graphics.parse(bytes) catch unreachable;
-				if (cts.isFg) {
+				if (ts.isFg) {
 					try expect(src.fg == t.color);
 					try expect(src.bg.type == .unset);
 				} else {
@@ -898,11 +898,160 @@ test Graphics {
 		}
 	}
 
-	// TODO test reset, both 0 and empty, in the middle of args
+	// test reset, both 0 and empty, in the middle of args
 	{
+		var buf: [Graphics.minLen + (consts.u8MaxStrLen*3) + 2]u8 = undefined;
+		std.mem.copyForwards(u8, &buf, &consts.CSI);
+
+		const Test = struct {
+			value:    u8,
+			expected: Graphics = undefined,
+		};
+
+		// test for all types
+		var opts = [_]Test{
+			.{.value = @intFromEnum(Opts.doubleUnderline)},
+			.{.value = @intFromEnum(ResetOpts.italic)},
+			.{.value = @intFromEnum(Pallet8Fg.black)},
+			.{.value = @intFromEnum(Pallet8Bg.black)},
+		};
+		for (&opts) |*o| o.*.expected = Graphics.parse(
+			std.fmt.bufPrint(&buf, "\x1b[{d}m", .{o.*.value}) catch unreachable
+		) catch unreachable;
+
+		// two args w/ reset at idx 0
+		buf[2] = ';';
+		for (opts) |o| {
+			var index: usize = 3;
+			index += (std.fmt.bufPrint(buf[index..], "{d}", .{o.value}) catch unreachable).len;
+			buf[index] = 'm';
+			index += 1;
+
+			const val = Graphics.parse(buf[0..index]) catch unreachable;
+			// reset should be set, as well as expected
+			try expect(@as(u72, @bitCast(val)) == @as(u72, @bitCast(ResetGraphics)) | @as(u72, @bitCast(o.expected)));
+		}
+
+		// two args w/ reset at idx 1
+		for (opts) |o| {
+			var index: usize = 2;
+			index += (std.fmt.bufPrint(buf[index..], "{d}", .{o.value}) catch unreachable).len;
+			buf[index] = ';';
+			index += 1;
+			buf[index] = 'm';
+			index += 1;
+
+			const val = Graphics.parse(buf[0..index]) catch unreachable;
+			// only reset should be set
+			try expect(val == ResetGraphics);
+		}
+
+		// three args w/ reset at idx 0
+		buf[2] = ';';
+		for (opts) |o1| {
+			var o1Idx: usize = 3;
+			o1Idx += (std.fmt.bufPrint(buf[o1Idx..], "{d}", .{o1.value}) catch unreachable).len;
+			buf[o1Idx] = ';';
+			o1Idx += 1;
+
+			for (opts) |o2| {
+				var index = o1Idx;
+				index += (std.fmt.bufPrint(buf[index..], "{d}", .{o2.value}) catch unreachable).len;
+
+				buf[index] = 'm';
+				index += 1;
+
+				const val = Graphics.parse(buf[0..index]) catch unreachable;
+				// reset should be set, as well as o1 & o2 expected
+				const expected = @as(u72, @bitCast(ResetGraphics)) | @as(u72, @bitCast(o1.expected)) | @as(u72, @bitCast(o2.expected));
+				try expect(@as(u72, @bitCast(val)) == expected);
+			}
+		}
+
+		// three args w/ reset at idx 1
+		for (opts) |o1| {
+			var o1Idx: usize = 3;
+			o1Idx += (std.fmt.bufPrint(buf[o1Idx..], "{d}", .{o1.value}) catch unreachable).len;
+			buf[o1Idx] = ';';
+			o1Idx += 1;
+
+			// insert reset
+			buf[o1Idx] = ';';
+			o1Idx += 1;
+
+			for (opts) |o2| {
+				var index = o1Idx;
+				index += (std.fmt.bufPrint(buf[index..], "{d}", .{o2.value}) catch unreachable).len;
+
+				buf[index] = 'm';
+				index += 1;
+
+				const val = Graphics.parse(buf[0..index]) catch unreachable;
+				// reset should be set, as well as o2 expected
+				const expected = @as(u72, @bitCast(ResetGraphics)) | @as(u72, @bitCast(o2.expected));
+				try expect(@as(u72, @bitCast(val)) == expected);
+			}
+		}
+
+		// three args w/ reset at idx 2
+		for (opts) |o1| {
+			var o1Idx: usize = 3;
+			o1Idx += (std.fmt.bufPrint(buf[o1Idx..], "{d}", .{o1.value}) catch unreachable).len;
+			buf[o1Idx] = ';';
+			o1Idx += 1;
+
+			for (opts) |o2| {
+				var index = o1Idx;
+				index += (std.fmt.bufPrint(buf[index..], "{d}", .{o2.value}) catch unreachable).len;
+
+				// insert reset
+				buf[index] = ';';
+				index += 1;
+
+				buf[index] = 'm';
+				index += 1;
+
+				const val = Graphics.parse(buf[0..index]) catch unreachable;
+				// only reset should be set
+				try expect(val == ResetGraphics);
+			}
+		}
 	}
 
-	// TODO set, reset, set
+	// set, reset, set
 	{
+		var buf: [Graphics.minLen + (consts.u8MaxStrLen*3) + 2]u8 = undefined;
+		std.mem.copyForwards(u8, &buf, &consts.CSI);
+
+		inline for (std.meta.fields(Opts)) |f| {
+			// bold and faint are already handled and double underline does not have a matching ResetOpt
+			if (f.value == @intFromEnum(Opts.bold) or f.value == @intFromEnum(Opts.faint) or f.value == @intFromEnum(Opts.doubleUnderline)) continue;
+
+			var index: usize = 2;
+			var val: Graphics = undefined;
+
+			// set
+			index += (std.fmt.bufPrint(buf[index..], "{d}", .{f.value}) catch unreachable).len;
+			buf[index] = 'm';
+			index += 1;
+			val = Graphics.parse(buf[0..index]) catch unreachable;
+			try expect(@field(val, f.name) == .set);
+
+			// reset
+			buf[index-1] = ';';
+			index += (std.fmt.bufPrint(buf[index..], "{d}", .{@intFromEnum(@field(ResetOpts, f.name))}) catch unreachable).len;
+			buf[index] = 'm';
+			index += 1;
+			val = Graphics.parse(buf[0..index]) catch unreachable;
+			try expect(@field(val, f.name) == .reset);
+
+			// set
+			buf[index-1] = ';';
+			index += (std.fmt.bufPrint(buf[index..], "{d}", .{f.value}) catch unreachable).len;
+			buf[index] = 'm';
+			index += 1;
+			val = Graphics.parse(buf[0..index]) catch unreachable;
+			try expect(@field(val, f.name) == .set);
+		}
 	}
 }
