@@ -1,8 +1,11 @@
 const std = @import("std");
-const incantations = @import("incantations.zig");
+const consts = @import("consts.zig");
+const EscSeq = @import("escSeq.zig").EscSeq;
 const assert = std.debug.assert;
 const stdin = std.io.getStdIn().reader();
 const stdout = std.io.getStdOut().writer();
+
+// TODO bigger in buffer, and remove parsed with iterator
 
 // TODO grapheme handling
 
@@ -10,7 +13,7 @@ const Input = union(enum) {
 	ascii:     u8,
 	codePoint: [5]u8, // first byte is len
 	invalid:   u8,
-	escSeq:    incantations.EscSeq,
+	escSeq:    EscSeq,
 };
 
 pub fn codePointBytes(cp: *const [5]u8) []const u8 {
@@ -67,19 +70,15 @@ fn awaitRead() void {
 		//// https://stackoverflow.com/a/68835029
 		//// https://www.youtube.com/watch?v=tbdym9ZtepQ good stuff
 		switch (buf[i]) {
-			// [ESC] control character sequence
-			27 => {
-				// TODO handle more than just CSI and FN Keys
+			// esc seq
+			consts.ESC => {
 				// TODO if it is not long enough and n == bufLen break so it can go to overflow and try again after another read
-
-				// CSI - 'ESC['
-				// FN Key F1 to F4 - 'ESCO'
 				if (n-i >= 3 and (buf[i+1] == '[' or buf[i+1] == 'O')) {
-					if (incantations.EscSeq.parse(buf[i..n])) |res| {
+					if (EscSeq.parse(buf[i..n])) |res| {
 						insert(.{.escSeq = res[0]});
 						if (!incrIfNoOverflow(&i, @truncate(res[1]))) return;
 						continue;
-					} else |err| if (err == incantations.ParseErr.InsufficientLen) break;
+					} else |err| if (err == error.InsufficientLen) break;
 				}
 
 				// handle it as just the ESC key

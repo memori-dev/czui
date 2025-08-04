@@ -164,7 +164,7 @@ fn printGen(comptime Enum: type, val: Enum) [3 + Enum.fnName.len]u8 {
 pub const NavKey = enum(u4) {
 	const Self = @This();
 
-	const fnName:     [1]u8  = .{'~'};
+	pub const fnName: [1]u8  = .{'~'};
 	const default:    ?Self  = null;
 	const defaultStr: ?[0]u8 = null;
 	const minLen:     usize  = consts.CSI.len + 1 + Self.fnName.len;
