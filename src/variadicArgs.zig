@@ -3,7 +3,9 @@ const consts = @import("consts.zig");
 
 pub const VariadicArg = @This();
 const Self = VariadicArg;
-	
+
+// TODO refactor next & nextBetter into one
+
 it: std.mem.SplitIterator(u8, .scalar),
 
 const Err = error{InvalidCharacter};
