@@ -121,13 +121,12 @@ pub fn Menu(comptime options: type) type {
 			.fg = .{.type = .rgb, .val = (65 << 16) + (90 << 8) + 119},
 			.bold = .set, .underline = .set,
 		},
-
-		winsize: std.posix.winsize = undefined,
-		alignment: Alignment = AlignCM,
-
 		unselStyle: Graphics = .{
 			.fg = .{.type = .rgb, .val = (13 << 16) + (27 << 8) + 42},
 		},
+
+		winsize: std.posix.winsize = undefined,
+		alignment: Alignment = AlignCM,
 
 		// TODO handle rerenders
 			// TODO the solution is to have a renderOption fn that has selected bool
@@ -199,6 +198,147 @@ pub fn Menu(comptime options: type) type {
 					else => {},
 				}
 			}
+		}
+	};
+}
+
+pub const Text = struct {
+	const Self = @This();
+
+	const qToReturn: []const u8 = "press q to return";
+
+	text: []const u8 = "lauren gypsum",
+
+	winsize: std.posix.winsize = undefined,
+	alignment: Alignment = AlignCM,
+
+	pub fn render(self: *@This()) !void {
+		self.winsize = try getWindowSize(null);
+		icanonSet(false);
+		echoSet(false);
+		_ = try stdout.write(fullWipe);
+		_ = try stdout.write(cursorInvisible);
+
+		const height, const width = blk: {
+			var height: u16 = 0;
+			var width: u16 = 0;
+
+			var iter = std.mem.splitScalar(u8, self.text, '\n');
+			while (iter.next()) |v| {
+				// 1 is subtracted to ensure that at least 1 char will be on the next line
+				const overflow: u16 = @truncate((v.len -| 1) / self.winsize.col);
+				// height is guaranteed to be at least 1 per line, and then an additional per overflow
+				height += 1 + overflow;
+				if (v.len > width) width = @min(self.winsize.col, v.len);
+			}
+
+			if (Self.qToReturn.len > width) width = Self.qToReturn.len;
+
+			break :blk .{height, width};
+		};
+
+		const x, var y = self.alignment.origin(self.winsize, width, height);
+
+		var iter = std.mem.splitScalar(u8, self.text, '\n');
+		while (iter.next()) |v| {
+			var winIter = std.mem.window(u8, v, width, width);
+			while (winIter.next()) |w| {
+				try moveCursor(x, y);
+				_ = try stdout.write(w);
+				y += 1;
+
+				if (y > self.winsize.row) break;
+			}
+
+			if (y > self.winsize.row) break;
+		}
+
+		if (y <= self.winsize.row) {
+			try moveCursor(x, y);
+			_ = try stdout.write(qToReturn);
+		}
+	}
+
+	pub fn display(self: *@This()) !void {
+		try self.render();
+
+		while (true) {
+			switch (input.awaitInput()) {
+	         .ascii => |v| if (v == 'q') return,
+				else => {},
+			}
+		}
+	}
+};
+
+pub fn Input(comptime bufSize: usize, ) type {
+	return struct {
+		prompt: []const u8 = "how much does a polar bear weigh?",
+		promptStyle: Graphics = .{
+			.fg = .{.type = .rgb, .val = (222 << 16) + (222 << 8) + 222},
+		},
+
+		// TODO placeholder
+		buf: [bufSize]u8 = undefined,
+		len: usize = 0,
+
+		winsize: std.posix.winsize = undefined,
+
+		alignment: Alignment = AlignTL,
+
+		// TODO selective rerender w bool arg for full rerender
+		pub fn render(self: *@This()) !void {
+			self.winsize = try getWindowSize(null);
+			icanonSet(false);
+			echoSet(false);
+			_ = try stdout.write(cursorVisible);
+			_ = try stdout.write(fullWipe);
+
+			const x, var y = self.alignment.origin(self.winsize, @truncate(@max(self.prompt.len, self.len + 2)), 2);
+
+			try moveCursor(x, y);
+			y += 1;
+			_ = try self.promptStyle.write(stdout, self.prompt);
+
+			try moveCursor(x, y);
+			_ = try stdout.write("> ");
+			if (self.len > 0) _ = try stdout.write(self.buf[0..self.len]);
+		}
+
+		pub fn getInput(self: *@This()) ![]const u8 {
+			try self.render();
+
+			while (true) {
+				switch (input.awaitInput()) {
+					.ascii => |v| {
+						switch (v) {
+							controlKeyEnter => {
+								// TODO instead just stop the cursor from going to a newline
+								_ = try stdout.write(cursorInvisible);
+								break;
+							},
+							controlKeyDelete => {
+								self.len = self.len -| 1;
+								try self.render();
+							},
+							else => {
+								self.buf[self.len] = v;
+								self.len += 1;
+								try self.render();
+							},
+						}
+					},
+					// TODO handle cursor movement?
+					.codePoint => |v| {
+						@memcpy(self.buf[self.len..self.len+v[0]], v[1..1+v[0]]);
+						self.len += v[0];
+						try self.render();
+					},
+					else => {},
+				}
+			}
+
+	      return self.buf[0..self.len];
 		}
 	};
 }
