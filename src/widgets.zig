@@ -14,7 +14,7 @@ const controlKeyDelete = 0x7f;
 const altScreenEnter: []const u8 = "\x1b[?1049h";
 const altScreenExit:  []const u8 = "\x1b[?1049l";
 
-const cursorInvisible: []const u8 = "\x1b[?25l";
+pub const cursorInvisible: []const u8 = "\x1b[?25l";
 const cursorVisible:   []const u8 = "\x1b[?25h";
 const cursorToOrigin:  []const u8 = "\x1b[H";
 const cursorMoveFmt:   []const u8 = "\x1b[{d};{d}H";
@@ -89,11 +89,11 @@ const Align = enum {
 	}
 };
 
-const Alignment = struct {
+pub const Alignment = struct {
 	x: Align,
 	y: Align,
 
-	fn origin(self: @This(), winsize: std.posix.winsize, x: u16, y: u16) struct{u16, u16} {
+	pub fn origin(self: @This(), winsize: std.posix.winsize, x: u16, y: u16) struct{u16, u16} {
 		return .{self.x.coord(winsize.col, x), self.y.coord(winsize.row, y)};
 	}
 };
@@ -109,6 +109,11 @@ pub const AlignCR = Alignment{.x = .ending, .y = .middle};
 pub const AlignBL = Alignment{.x = .origin, .y = .ending};
 pub const AlignBM = Alignment{.x = .middle, .y = .ending};
 pub const AlignBR = Alignment{.x = .ending, .y = .ending};
+
+pub const StyledText = struct {
+	style: ?Graphics = null,
+	text:  []const u8,
+};
 
 pub fn Menu(comptime options: type) type {
 	const ti = comptime @typeInfo(options).@"enum";
@@ -207,10 +212,9 @@ pub const Text = struct {
 
 	const qToReturn: []const u8 = "press q to return";
 
-	text: []const u8 = "lauren gypsum",
-
-	winsize: std.posix.winsize = undefined,
-	alignment: Alignment = AlignCM,
+	styledText: StyledText = .{.text = "lauren gypsum"},
+	winsize:    std.posix.winsize = undefined,
+	alignment:  Alignment = AlignCM,
 
 	pub fn render(self: *@This()) !void {
 		self.winsize = try getWindowSize(null);
@@ -223,7 +227,7 @@ pub const Text = struct {
 			var height: u16 = 0;
 			var width: u16 = 0;
 
-			var iter = std.mem.splitScalar(u8, self.text, '\n');
+			var iter = std.mem.splitScalar(u8, self.styledText.text, '\n');
 			while (iter.next()) |v| {
 				// 1 is subtracted to ensure that at least 1 char will be on the next line
 				const overflow: u16 = @truncate((v.len -| 1) / self.winsize.col);
@@ -239,7 +243,8 @@ pub const Text = struct {
 
 		const x, var y = self.alignment.origin(self.winsize, width, height);
 
-		var iter = std.mem.splitScalar(u8, self.text, '\n');
+		if (self.styledText.style) |style| _ = try style.apply(stdout);
+		var iter = std.mem.splitScalar(u8, self.styledText.text, '\n');
 		while (iter.next()) |v| {
 			var winIter = std.mem.window(u8, v, width, width);
 			while (winIter.next()) |w| {
@@ -253,6 +258,8 @@ pub const Text = struct {
 			if (y > self.winsize.row) break;
 		}
 
+		// reset graphics
+		if (self.styledText.style != null) _ = try stdout.write("\x1b[m");
 		if (y <= self.winsize.row) {
 			try moveCursor(x, y);
 			_ = try stdout.write(qToReturn);
@@ -271,13 +278,12 @@ pub const Text = struct {
 	}
 };
 
-pub fn Input(comptime bufSize: usize, ) type {
+pub fn Input(comptime bufSize: usize) type {
 	return struct {
-		prompt: []const u8 = "how much does a polar bear weigh?",
-		promptStyle: Graphics = .{
-			.fg = .{.type = .rgb, .val = (222 << 16) + (222 << 8) + 222},
+		prompt: StyledText = .{
+			.style = .{.fg = .{.type = .rgb, .val = (222 << 16) + (222 << 8) + 222}},
+			.text = "how much does a polar bear weigh?",
 		},
-
 		// TODO placeholder
 		buf: [bufSize]u8 = undefined,
 		len: usize = 0,
@@ -294,11 +300,12 @@ pub fn Input(comptime bufSize: usize, ) type {
 			_ = try stdout.write(cursorVisible);
 			_ = try stdout.write(fullWipe);
 
-			const x, var y = self.alignment.origin(self.winsize, @truncate(@max(self.prompt.len, self.len + 2)), 2);
+			const x, var y = self.alignment.origin(self.winsize, @truncate(@max(self.prompt.text.len, self.len + 2)), 2);
 
 			try moveCursor(x, y);
+			if (self.prompt.style) |style| _ = try style.write(stdout, self.prompt.text)
+			else _ = try stdout.write(self.prompt.text);
 			y += 1;
-			_ = try self.promptStyle.write(stdout, self.prompt);
 
 			try moveCursor(x, y);
 			_ = try stdout.write("> ");
@@ -342,3 +349,62 @@ pub fn Input(comptime bufSize: usize, ) type {
 		}
 	};
 }
+
+// TODO progress checklist
+
+const progressBarStr: [1024]u8 = @splat('#');
+
+pub const ProgressBar = struct {
+	filledStyle: Graphics = .{
+		.fg = .{.type = .rgb, .val = (218 << 16) + (98 << 8) + 125},
+		.bold = .set,
+	},
+	emptyStyle: Graphics = .{.faint = .set},
+
+	title: ?StyledText = null,
+	progress: f32 = 0,
+	winsize: std.posix.winsize = undefined,
+	alignment: Alignment = AlignCM,
+
+	pub fn render(self: *@This()) !void {
+		self.winsize = try getWindowSize(null);
+		icanonSet(false);
+		echoSet(false);
+		_ = try stdout.write(fullWipe);
+		_ = try stdout.write(cursorInvisible);
+
+		const x, var y = self.alignment.origin(
+			self.winsize,
+			self.winsize.col / 2,
+			// TODO calc bounding box
+			if (self.title == null) 1 else 2,
+		);
+
+		if (self.title) |title| {
+			try moveCursor(x, y);
+			y += 1;
+
+			if (title.style) |style| _ = try style.write(stdout, title.text)
+			else _ = try stdout.write(title.text);
+		}
+
+		try moveCursor(x, y);
+		const width = self.winsize.col / 2;
+		const widthF: f32 = @floatFromInt(width);
+		const filled: usize = @intFromFloat(widthF * self.progress);
+		const empty = width - filled;
+		_ = try self.filledStyle.write(stdout, progressBarStr[0..filled]);
+		_ = try self.emptyStyle.write(stdout, progressBarStr[0..empty]);
+	}
+
+	pub fn updateTitle(self: *@This(), title: StyledText) !void {
+		self.title = title;
+		try self.render();
+	}
+
+	pub fn updateProgress(self: *@This(), progress: f32) !void {
+		assert(progress >= 0 and progress <= 1);
+		self.progress = progress;
+		try self.render();
+	}
+};

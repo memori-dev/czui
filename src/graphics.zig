@@ -577,6 +577,11 @@ pub const Graphics = packed struct(u72) {
 		return .{out, index};
 	}
 
+	pub fn apply(self: @This(), writer: std.fs.File.Writer) !usize {
+		const graphic, const graphicLen = self.print();
+		return writer.write(graphic[0..graphicLen]);
+	}
+
 	pub fn write(self: @This(), writer: std.fs.File.Writer, bytes: []const u8) !usize {
 		const graphic, const graphicLen = self.print();
 		var n: usize = 0;
