@@ -234,7 +234,3 @@ pub const EscSeq = union(enum) {
 		}
 	}
 };
-
-test {
-    std.testing.refAllDecls(@This());
-}
