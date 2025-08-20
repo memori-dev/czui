@@ -13,6 +13,7 @@ pub const EraseDisplay = @import("singularArg.zig").EraseDisplay;
 pub const EraseLine = @import("singularArg.zig").EraseLine;
 pub const DeviceStatusReport = @import("singularArg.zig").DeviceStatusReport;
 pub const widgets = @import("widgets.zig");
+pub const winch = @import("winchWatch.zig");
 
 test {
     std.testing.refAllDecls(@This());
