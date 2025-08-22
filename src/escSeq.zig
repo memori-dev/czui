@@ -182,7 +182,17 @@ pub const EscSeq = union(enum) {
 						
 						'H', 'f' => {
 							var it = VariadicArgs.init(bytes[2..i]);
-							return .{.{.moveCursorAbs = .{(try it.nextBetter(u16)) orelse 1, (try it.nextBetter(u16) orelse 1)}}, i+1};
+							const row = it.nextBetter(u16) catch |err| switch (err) {
+								VariadicArgs.PeekErr.Empty => 1,
+								VariadicArgs.PeekErr.InvalidCharacter => return err,
+								VariadicArgs.PeekErr.Overflow => 1,
+							};
+							const col = it.nextBetter(u16) catch |err| switch (err) {
+								VariadicArgs.PeekErr.Empty => 1,
+								VariadicArgs.PeekErr.InvalidCharacter => return err,
+								VariadicArgs.PeekErr.Overflow => 1,
+							};
+							return .{.{.moveCursorAbs = .{row orelse 1, col orelse 1}}, i+1};
 						},
 
 						'I' => return .{.{.cursorForwardTabulation =  parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},

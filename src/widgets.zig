@@ -115,98 +115,99 @@ pub const StyledText = struct {
 	text:  []const u8,
 };
 
-pub fn Menu(comptime options: type) type {
-	const ti = comptime @typeInfo(options).@"enum";
-	assert(std.meta.hasMethod(options, "text"));
+pub fn Menu(comptime Options: type) type {
+	const ti = comptime @typeInfo(Options).@"enum";
+
+	const fields: [ti.fields.len]Options = blk: {
+		var out: [ti.fields.len]Options = undefined;
+		inline for (ti.fields, 0..) |field, i| out[i] = @field(Options, field.name);
+
+		break :blk out;
+	};
+
+	const texts: [ti.fields.len][]const u8 = blk: {
+		const hasTextMethod = std.meta.hasMethod(Options, "text");
+		var out: [ti.fields.len][]const u8 = undefined;
+		inline for (fields, 0..) |field, i| out[i] = if (hasTextMethod) field.text() else @tagName(field);
+
+		break :blk out;
+	};
+
+	const width = blk: {
+		var out: usize = 0;
+		inline for (texts) |text| {
+			if (text.len > out) out = text.len;
+		}
+
+		break :blk out;
+	};
 
 	return struct {
-		selected: ti.tag_type = 0,
+		selected: usize = 0,
 
 		selStyle: Graphics = .{
 			.fg = .{.type = .rgb, .val = (65 << 16) + (90 << 8) + 119},
 			.bold = .set, .underline = .set,
 		},
 		unselStyle: Graphics = .{
-			.fg = .{.type = .rgb, .val = (13 << 16) + (27 << 8) + 42},
+			.fg = .{.type = .rgb, .val = (35 << 16) + (60 << 8) + 89},
 		},
 
-		winsize: std.posix.winsize = undefined,
 		alignment: Alignment = AlignCM,
 
 		// TODO handle rerenders
 			// TODO the solution is to have a renderOption fn that has selected bool
 			// TODO call this for the currIndex and then the updated currIndex
 		fn updateSelected(self: *@This(), increment: bool) !void {
-			var currIndex: ti.tag_type = undefined;
-			inline for (ti.fields, 0..) |field, i| {
-				if (field.value == self.selected) currIndex = i;
-			}
-
-			// this should never happen, i hope
-			assert(currIndex >= 0 and currIndex < ti.fields.len);
+			assert(self.selected < ti.fields.len);
 
 			if (increment) {
-				currIndex = currIndex +% 1;
-				if (currIndex < 0 or currIndex >= ti.fields.len) currIndex = 0;
+				self.selected += 1;
+				// overflow
+				if (self.selected == fields.len) self.selected = 0;
 			} else {
-				currIndex = currIndex -% 1;
-				if (currIndex < 0 or currIndex >= ti.fields.len) currIndex = ti.fields.len - 1;
+				// underflow
+				if (self.selected == 0) self.selected = fields.len;
+				self.selected -= 1;
 			}
-
-			self.selected = currIndex;
 
 			try self.render();
 		}
 
 		pub fn render(self: *@This()) !void {
-			self.winsize = try getWindowSize(null);
+			const winsize = try getWindowSize(null);
 			icanonSet(false);
 			echoSet(false);
 			_ = try stdout.write(cursorInvisible);
 			_ = try stdout.write(fullWipe);
 
-			// TODO just calc this at comptime?
-			var width: usize = 0;
-			inline for (ti.fields) |field| {
-				const n = @field(options, field.name).text().len;
-				if (n > width) width = n;
-			}
-			const x, var y = self.alignment.origin(self.winsize, @truncate(width), ti.fields.len);
-
-			inline for (ti.fields, 0..) |field, i| {
-				const f = @field(options, field.name);
-
+			const x, var y = self.alignment.origin(winsize, @truncate(width), fields.len);
+			inline for (0..texts.len) |i| {
 				try moveCursor(x, y);
-				if (self.selected == i) _ = try self.selStyle.write(stdout, f.text())
-				else _ = try self.unselStyle.write(stdout, f.text());
+				if (self.selected == i) _ = try self.selStyle.write(stdout, texts[i])
+				else _ = try self.unselStyle.write(stdout, texts[i]);
 				
 				y += 1;
 			}
 		}
 
-		pub fn getSelection(self: *@This()) !options {
+		pub fn getSelection(self: *@This()) !Options {
 			try self.render();
 
-			while (true) {
-				switch (input.awaitInput()) {
-		         .escSeq => |v| {
-		         	switch (v) {
-							.moveCursorUp   => try self.updateSelected(false),
-							.moveCursorDown => try self.updateSelected(true),
-							else            => {},		         		
-		         	}
-		         },
-		         .ascii => |v| {
-		         	if (v != controlKeyEnter) continue;
-						inline for (ti.fields, 0..) |field, i| if (self.selected == i) return @field(options, field.name);
-		         },
-					else => {},
-				}
-			}
+			while (true) switch (input.awaitInput()) {
+				.escSeq => |v| switch (v) {
+					.moveCursorUp   => try self.updateSelected(false),
+					.moveCursorDown => try self.updateSelected(true),
+					else            => {},
+				},
+				.ascii => |v| if (v == controlKeyEnter) return fields[self.selected],
+				else => {},
+			};
 		}
 	};
 }
 
+// TODO comptime and runtime versions
 pub const Text = struct {
 	const Self = @This();
 
@@ -269,17 +270,17 @@ pub const Text = struct {
 	pub fn display(self: *@This()) !void {
 		try self.render();
 
-		while (true) {
-			switch (input.awaitInput()) {
-	         .ascii => |v| if (v == 'q') return,
-				else => {},
-			}
-		}
+		while (true) switch (input.awaitInput()) {
+			.ascii => |v| if (v == 'q') return,
+			else => {},
+		};
 	}
 };
 
 pub fn Input(comptime bufSize: usize) type {
 	return struct {
+		const Self = @This();
+
 		prompt: StyledText = .{
 			.style = .{.fg = .{.type = .rgb, .val = (222 << 16) + (222 << 8) + 222}},
 			.text = "how much does a polar bear weigh?",
@@ -288,19 +289,18 @@ pub fn Input(comptime bufSize: usize) type {
 		buf: [bufSize]u8 = undefined,
 		len: usize = 0,
 
-		winsize: std.posix.winsize = undefined,
-
 		alignment: Alignment = AlignTL,
 
 		// TODO selective rerender w bool arg for full rerender
-		pub fn render(self: *@This()) !void {
-			self.winsize = try getWindowSize(null);
+		// TODO needs to handle codepoints when calculating width
+		pub fn render(self: *Self) !void {
+			const winsize = try getWindowSize(null);
 			icanonSet(false);
 			echoSet(false);
 			_ = try stdout.write(cursorVisible);
 			_ = try stdout.write(fullWipe);
 
-			const x, var y = self.alignment.origin(self.winsize, @truncate(@max(self.prompt.text.len, self.len + 2)), 2);
+			const x, var y = self.alignment.origin(winsize, @truncate(@max(self.prompt.text.len, self.len + 2)), 2);
 
 			try moveCursor(x, y);
 			if (self.prompt.style) |style| _ = try style.write(stdout, self.prompt.text)
@@ -312,38 +312,34 @@ pub fn Input(comptime bufSize: usize) type {
 			if (self.len > 0) _ = try stdout.write(self.buf[0..self.len]);
 		}
 
-		pub fn getInput(self: *@This()) ![]const u8 {
+		pub fn getInput(self: *Self) ![]const u8 {
 			try self.render();
 
-			while (true) {
-				switch (input.awaitInput()) {
-					.ascii => |v| {
-						switch (v) {
-							controlKeyEnter => {
-								// TODO instead just stop the cursor from going to a newline
-								_ = try stdout.write(cursorInvisible);
-								break;
-							},
-							controlKeyDelete => {
-								self.len = self.len -| 1;
-								try self.render();
-							},
-							else => {
-								self.buf[self.len] = v;
-								self.len += 1;
-								try self.render();
-							},
-						}
+			while (true) switch (input.awaitInput()) {
+				.ascii => |v| switch (v) {
+					controlKeyEnter => {
+						_ = try stdout.write(cursorInvisible);
+						break;
 					},
-					// TODO handle cursor movement?
-					.codePoint => |v| {
-						@memcpy(self.buf[self.len..self.len+v[0]], v[1..1+v[0]]);
-						self.len += v[0];
+					controlKeyDelete => {
+						// TODO needs to handle codepoints
+						self.len = self.len -| 1;
 						try self.render();
 					},
-					else => {},
-				}
-			}
+					else => {
+						self.buf[self.len] = v;
+						self.len += 1;
+						try self.render();
+					},
+				},
+				// TODO handle cursor movement?
+				.codePoint => |v| {
+					@memcpy(self.buf[self.len..self.len+v[0]], v[1..1+v[0]]);
+					self.len += v[0];
+					try self.render();
+				},
+				else => {},
+			};
 
 	      return self.buf[0..self.len];
 		}
@@ -352,6 +348,8 @@ pub fn Input(comptime bufSize: usize) type {
 
 // TODO progress checklist
 
+// TODO better handling, [16]u8 and just loop
+// TODO allow for user selected char/codepoint
 const progressBarStr: [1024]u8 = @splat('#');
 
 pub const ProgressBar = struct {
@@ -363,19 +361,18 @@ pub const ProgressBar = struct {
 
 	title: ?StyledText = null,
 	progress: f32 = 0,
-	winsize: std.posix.winsize = undefined,
 	alignment: Alignment = AlignCM,
 
 	pub fn render(self: *@This()) !void {
-		self.winsize = try getWindowSize(null);
+		const winsize = try getWindowSize(null);
 		icanonSet(false);
 		echoSet(false);
 		_ = try stdout.write(fullWipe);
 		_ = try stdout.write(cursorInvisible);
 
 		const x, var y = self.alignment.origin(
-			self.winsize,
-			self.winsize.col / 2,
+			winsize,
+			winsize.col / 2,
 			// TODO calc bounding box
 			if (self.title == null) 1 else 2,
 		);
@@ -389,7 +386,7 @@ pub const ProgressBar = struct {
 		}
 
 		try moveCursor(x, y);
-		const width = self.winsize.col / 2;
+		const width = winsize.col / 2;
 		const widthF: f32 = @floatFromInt(width);
 		const filled: usize = @intFromFloat(widthF * self.progress);
 		const empty = width - filled;
@@ -406,5 +403,118 @@ pub const ProgressBar = struct {
 		assert(progress >= 0 and progress <= 1);
 		self.progress = progress;
 		try self.render();
+	}
+};
+
+pub const ScrollableText = struct {
+	const Self = @This();
+
+	text: []const u8,
+	col: u16 = 0,
+
+	precalcOffset: usize = 0,
+
+	pub fn updateCol(self: *Self, incr: bool) !void {
+		if (incr) self.col +|= 1 else self.col -|= 1;
+		try self.render();
+	}
+
+	pub fn setRowToEnd(self: *Self) !void {
+		self.precalcOffset = std.mem.lastIndexOfScalar(u8, self.text, '\n') orelse 0;
+		try self.render();
+	}
+
+	pub fn setRow(self: *Self, row: u16) !void {
+		self.precalcOffset = 0;
+
+		for (0..row) |_| {
+			if (self.precalcOffset >= self.text.len) break;
+
+			self.precalcOffset += std.mem.indexOfScalar(u8, self.text[self.precalcOffset..], '\n') orelse break;
+			self.precalcOffset += 1;
+		}
+
+		try self.render();
+	}
+
+	pub fn updateRow(self: *Self, incr: bool, diff: u16) !void {
+		for (0..diff) |_| {
+			// increment
+			if (incr) {
+				if (self.precalcOffset >= self.text.len) break;
+
+				self.precalcOffset += std.mem.indexOfScalar(u8, self.text[self.precalcOffset..], '\n') orelse break;
+				self.precalcOffset += 1;
+				continue;
+			}
+
+			// decrement
+			const next = std.mem.lastIndexOfScalar(u8, self.text[0..self.precalcOffset], '\n') orelse 0;
+			self.precalcOffset = std.mem.lastIndexOfScalar(u8, self.text[0..next], '\n') orelse 0;
+			if (self.precalcOffset != 0) self.precalcOffset += 1;
+		}
+
+		try self.render();
+	}
+
+	// TODO ensure the col is <= max width - 1
+	pub fn render(self: *Self) !void {
+		const winsize = try getWindowSize(null);
+		icanonSet(false);
+		echoSet(false);
+		_ = try stdout.write(fullWipe);
+		_ = try stdout.write(cursorInvisible);
+
+		// TODO ansi esc seq width handling
+		// TODO codepoint width handling
+
+		var offset = self.precalcOffset;
+		var y: u16 = 1;
+		while (y <= winsize.row and offset < self.text.len) {
+			try moveCursor(0, y);
+
+			const end = std.mem.indexOfScalar(u8, self.text[offset..], '\n') orelse self.text.len - offset;
+			if (self.col <= end) {
+				const start = offset + self.col;
+				const writableEnd = start + @min(@as(usize, @intCast(winsize.col)), end - self.col);
+				_ = try stdout.write(self.text[start..writableEnd]);
+			}
+
+			y += 1;
+			offset += end + 1;
+		}
+	}
+
+	pub fn renderLoop(self: *Self) !void {
+		try self.render();
+
+		while (true) switch (input.awaitInput()) {
+         .escSeq => |v| switch (v) {
+				.moveCursorUp    => try self.updateRow(false, 1),
+				.moveCursorDown  => try self.updateRow(true, 1),
+				.moveCursorRight => try self.updateCol(true),
+				.moveCursorLeft  => try self.updateCol(false),
+	         .navKey => |w| switch (w) {
+					.pageUp   => try self.updateRow(false, (try getWindowSize(null)).row),
+					.pageDown => try self.updateRow(true, (try getWindowSize(null)).row),
+					else => {},
+	         },
+	         // home
+	         .moveCursorAbs => |pos| if (pos[0] == 1 and pos[1] == 1) {
+					self.col = 0;
+					try self.setRow(0);
+	         },
+	         // end
+	         .moveCursorToStartOfPrevLine => |lines| if (lines == 1) try self.setRowToEnd(),
+				else => {},
+         },
+         .ascii => |v| switch (v) {
+				controlKeyEnter => try self.updateRow(true, 1),
+				' ' => try self.updateRow(true, (try getWindowSize(null)).row),
+				'q' => return,
+				else => {},
+         },
+			else => {},
+		};
 	}
 };
