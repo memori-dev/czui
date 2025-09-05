@@ -1,23 +1,34 @@
 const std = @import("std");
 const widgets = @import("widgets.zig");
+const alignment = @import("alignment.zig");
+const Bounds = @import("bounds.zig").Bounds;
 const stdout = std.io.getStdOut().writer();
 
+// TODO bounds handling
 pub const Spinner = struct {
+	const Self = @This();
+
 	// TODO allow height and width instead of size
 	size: u16 = 2,
 	index: u16 = 0,
-	winsize: std.posix.winsize = undefined,
-	alignment: widgets.Alignment = widgets.AlignCM,
+	alignment: alignment.Alignment = alignment.AlignMM,
 	// TODO spinner tail
 	spinner: u8 = '#',
 	alive: bool = false,
 
-	pub fn render(self: *@This()) !void {
-		self.winsize = try widgets.getWindowSize(null);
+	alignedBounds: Bounds = undefined,
+
+	pub fn sigwinch(self: *Self, bounds: Bounds) !void {
+		return self.render(bounds);
+	}
+
+	pub fn render(self: *Self, bounds: Bounds) !void {
 		widgets.icanonSet(false);
 		widgets.echoSet(false);
 		_ = try stdout.write(widgets.fullWipe);
 		_ = try stdout.write(widgets.cursorInvisible);
+
+		self.alignedBounds = self.alignment.getBounds(bounds, .{self.size, self.size});
 
 		try self.rerender();
 	}
@@ -34,8 +45,8 @@ pub const Spinner = struct {
 	//// changed the 4 calls to write with a single print
    //// try stdout.print("\x1b[{d};0H\x1b[0K\x1b[{d};{d}H{c}", .{prevY, y, x, self.spinner});
    // NB: selective render was also more stable visually at these extreme refresh rates
-	pub fn rerender(self: *@This()) !void {
-		var x, var y = self.alignment.origin(self.winsize, self.size, self.size);
+	pub fn rerender(self: *Self) !void {
+		var x, var y = self.alignedBounds.origin();
 		var prevY = y;
 
 		//  → →   
@@ -74,12 +85,13 @@ pub const Spinner = struct {
 		}
 		else unreachable;
 
+		// TODO use constants
       // moveCursor eraseFromCursorToEndOfLine moveCursor spinner
       try stdout.print("\x1b[{d};0H\x1b[0K\x1b[{d};{d}H{c}", .{prevY, y, x, self.spinner});
 	}
 
-	pub fn loop(self: *@This(), delay: u64) !void {
-		try self.render();
+	pub fn loop(self: *Self, bounds: Bounds, delay: u64) !void {
+		try self.render(bounds);
 		self.alive = true;
 		var lastTs = std.time.Instant.now() catch unreachable;
 
@@ -92,3 +104,45 @@ pub const Spinner = struct {
 		}
 	}
 };
+
+pub const ProgressBarOscillator = struct {
+   minDelay: u64 = 10_000_000,
+   diff: f32 = 0.03,
+   lastTs: std.time.Instant = undefined,
+   forwards: bool = true,
+   pb: *widgets.ProgressBar,
+
+   pub fn new(pb: *widgets.ProgressBar) @This() {
+      return .{
+         .pb = pb,
+         .lastTs = std.time.Instant.now() catch unreachable,
+      };
+   }
+
+   pub fn render(self: *@This()) !void {
+      return self.oscillate();
+   }
+
+   pub fn oscillate(self: *@This()) !void {
+      const now = std.time.Instant.now() catch unreachable;
+      if (now.since(self.lastTs) <= self.minDelay) return;
+      self.lastTs = now;
+
+      var progress = self.pb.progress + if (self.forwards) self.diff else -self.diff;
+      if (progress > 1) {
+         self.forwards = false;
+         progress = 1;
+      } else if (progress < 0) {
+         self.forwards = true;
+         progress = 0;
+      }
+
+      try self.pb.updateProgress(progress);
+   }
+};
+
+// TODO animation ideas
+// pong game
+// layering animations
+//// ascii art text and snow falling in the background
+//// render the snow first and then the ascii art text "over top"

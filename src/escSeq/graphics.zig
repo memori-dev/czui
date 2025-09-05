@@ -351,10 +351,10 @@ test parseColor {
 // m(...x) -> color / graphics, where x either sets or resets and there are x combos for 8 & 24 bit color
 pub const Graphics = packed struct(u72) {
 	const Self = @This();
-	const fnName:     [1]u8 = .{'m'};
-	const default:    Self  = .{.reset = .set};
-	const defaultStr: [3]u8 = consts.CSI ++ Self.fnName;
-	const minLen:     usize = defaultStr.len;
+	pub const fnName:     [1]u8 = .{'m'};
+	pub const default:    Self  = .{.reset = .set};
+	pub const defaultStr: [3]u8 = consts.CSI ++ Self.fnName;
+	pub const minLen:     usize = defaultStr.len;
 
 	reset: UnsetSet = .unset, // 0 (default)
 
@@ -560,7 +560,7 @@ pub const Graphics = packed struct(u72) {
 				.rgb => {
 					index += (std.fmt.bufPrint(
 						out[index..],
-						"{d};2;{d};{d};{d}",
+						"{d};2;{d};{d};{d};",
 						.{fgBgInt, (@field(self, f.name).val >> 16) & 255, (@field(self, f.name).val >> 8) & 255, @field(self, f.name).val & 255}
 					) catch unreachable).len;
 				},
@@ -575,6 +575,12 @@ pub const Graphics = packed struct(u72) {
 		}
 
 		return .{out, index};
+	}
+
+	pub fn set(self: @This(), writer: std.fs.File.Writer) !void {
+		_ = try writer.write("\x1b[m");
+		const graphic, const graphicLen = self.print();
+		_ = try writer.write(graphic[0..graphicLen]);
 	}
 
 	pub fn apply(self: @This(), writer: std.fs.File.Writer) !usize {

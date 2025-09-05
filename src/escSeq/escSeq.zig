@@ -18,6 +18,11 @@ const Graphics = @import("graphics.zig").Graphics;
 const DeviceStatusReport = @import("singularArg.zig").DeviceStatusReport;
 
 const CursorStyle = @import("singularArg.zig").CursorStyle;
+const PrivateModeSpec = @import("incantationSpec.zig").PrivateMode;
+
+const cursor = @import("cursor.zig");
+
+const mouse = @import("mouse.zig");
 
 // Quick intro
 //// https://notes.burke.libbey.me/ansi-escape-codes/
@@ -34,6 +39,33 @@ fn parseFirstInteger(comptime T: type, bytes: []const u8) ?T {
 	if (res) |v| return v
 	else |_| return null;
 }
+
+pub const ModeValue = enum(u3) {
+	notRecognized = 0,
+	set           = 1,
+	reset         = 2,
+	permSet       = 3,
+	permReset     = 4,
+};
+
+// \x1b[?{privateMode};{value}$y
+pub const ReqPrivateMode = struct {
+	const Self = @This();
+
+	privateMode: PrivateModeSpec,
+	value:       ModeValue,
+
+	pub fn parse(bytes: []const u8) !Self {
+		if (bytes[0] != '?') return error.InvalidFormat;
+		if (bytes[bytes.len-1] != '$') return error.InvalidFormat;
+
+		var it = VariadicArgs.init(bytes[1..bytes.len-1]);
+		return .{
+			.privateMode = try std.meta.intToEnum(PrivateModeSpec, try it.nextBetter(u11) orelse return error.InvalidFormat),
+			.value = try std.meta.intToEnum(ModeValue, try it.nextBetter(u3) orelse return error.InvalidFormat),
+		};
+	}
+};
 
 // TODO control keys?
 // all unsigned ints have a default value of 1
@@ -77,13 +109,14 @@ pub const EscSeq = union(enum) {
 
 	// H(?y, ?x) - move cursor to y (default 1), x (default 1)
 	// f(?y, ?x) - move cursor to y (default 1), x (default 1)
-	moveCursorAbs: struct{u16, u16},
+	moveCursorAbs: cursor.MoveCursorAbs,
 
 
 	// I(?x) - Cursor Forward Tabulation x (default 1) tab stops
-	cursorForwardTabulation: u16,
+	cursorForwardsTab: u16,
 	// Z(?x) - cursor backward tabulation x (default 1) tab stops
-	cursorBackwardTabulation: u16,
+	// shift + tab
+	cursorBackwardsTab: u16,
 
 
 	// TODO vt220 "ESC[?xJ" variant?
@@ -121,12 +154,15 @@ pub const EscSeq = union(enum) {
 	//screenMode: ScreenMode,
 
 
+	reqPrivateMode: ReqPrivateMode,
+
+
 	// m(...x) - sets graphics dependant upon x (default 0)
 	graphics: Graphics,
 
-
-	// TODO
-	//mouse: Mouse,
+	// <{event};{x};{y}M
+	// <{event};{x};{y}m
+	mouse: mouse.MouseEvent,
 
 
 	// n(x)
@@ -192,11 +228,11 @@ pub const EscSeq = union(enum) {
 								VariadicArgs.PeekErr.InvalidCharacter => return err,
 								VariadicArgs.PeekErr.Overflow => 1,
 							};
-							return .{.{.moveCursorAbs = .{row orelse 1, col orelse 1}}, i+1};
+							return .{.{.moveCursorAbs = .{.x = col orelse 1, .y = row orelse 1}}, i+1};
 						},
 
-						'I' => return .{.{.cursorForwardTabulation =  parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
-						'Z' => return .{.{.cursorBackwardTabulation = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'I' => return .{.{.cursorForwardsTab =  parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'Z' => return .{.{.cursorBackwardsTab = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
 
 						// TODO orelse 1
 						'J' => return .{.{.eraseDisplay = try EraseDisplay.parse(bytes[0..i+1])}, i+1},
@@ -204,7 +240,13 @@ pub const EscSeq = union(enum) {
 						'K' => return .{.{.eraseLine    = try EraseLine.parse(bytes[0..i+1])}, i+1},
 						'X' => return .{.{.eraseChars   = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
 
-						'M' => return .{.{.deleteLines = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
+						'M' => {
+							// mouse
+							if (bytes[2] == '<') return .{.{.mouse = try mouse.MouseEvent.parse(bytes[2..i+1])}, i+1};
+
+							// deleteLines
+							return .{.{.deleteLines = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1};
+						},
 						'P' => return .{.{.deleteChars = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
 						
 						'S' => return .{.{.scrollUp   = parseFirstInteger(u16, bytes[2..i]) orelse 1}, i+1},
@@ -218,7 +260,13 @@ pub const EscSeq = union(enum) {
 							else => .{.{.setResetMode = try SetResetMode.parse(bytes[0..i+1])}, i+1},
 						},
 
-						'm' => return .{.{.graphics = try Graphics.parse(bytes[0..i+1])}, i+1},
+						'm' => {
+							// mouse
+							if (bytes[2] == '<') return .{.{.mouse = try mouse.MouseEvent.parse(bytes[2..i+1])}, i+1};
+
+							// graphics
+							return .{.{.graphics = try Graphics.parse(bytes[0..i+1])}, i+1};
+						},
 
 						'n' => return .{.{.deviceStatusReport = try DeviceStatusReport.parse(bytes[0..i+1])}, i+1},
 
@@ -230,7 +278,7 @@ pub const EscSeq = union(enum) {
 						's' => return .{.{.saveCursorPosition    = {}}, i+1},
 						'u' => return .{.{.restoreCursorPosition = {}}, i+1},
 
-						// TODO mouse
+						'y' => return .{.{.reqPrivateMode = try ReqPrivateMode.parse(bytes[2..i])}, i+1},
 
 						else => {},
 					}

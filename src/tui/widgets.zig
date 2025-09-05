@@ -1,10 +1,14 @@
 const std = @import("std");
+const Graphics = @import("../escSeq/graphics.zig").Graphics;
+const input = @import("../input/input.zig");
+const alignment = @import("alignment.zig");
+const cursor = @import("../escSeq/cursor.zig");
+const Bounds = @import("bounds.zig").Bounds;
+
 const linux = std.os.linux;
 const assert = std.debug.assert;
 const stdout = std.io.getStdOut().writer();
 const stdoutHandle = std.io.getStdOut().handle;
-const Graphics = @import("graphics.zig").Graphics;
-const input = @import("input.zig");
 
 const controlKeyTab    = 0x9;
 const controlKeyEnter  = 0xa;
@@ -33,9 +37,6 @@ const modeInverse:       []const u8 = "\x1b[7m";
 const modeHidden:        []const u8 = "\x1b[8m";
 const modeStrikethrough: []const u8 = "\x1b[9m";
 
-//pub const mouseDetection: []const u8 = "\x1b[?1000;1006;1015h";
-pub const mouseDetection: []const u8 = "\x1b[?1003;1006;1015h";
-
 pub const fullWipe = eraseScreen ++ eraseScrollback ++ cursorToOrigin;
 
 // cursor starts at {1,1}
@@ -60,6 +61,7 @@ pub fn echoSet(val: bool) void {
 	_ = linux.tcsetattr(1, std.posix.TCSA.NOW, &term);
 }
 
+// TODO remove
 pub fn getWindowSize(errno: ?*std.posix.E) !std.posix.winsize {
    var winsize: std.posix.winsize = undefined;
    const err = std.posix.errno(
@@ -71,210 +73,9 @@ pub fn getWindowSize(errno: ?*std.posix.E) !std.posix.winsize {
    return error.CheckErrno;
 }
 
-// origin: 1, 1
-// writable area is inclusive of winsize
-//// x [1, winsize.col]
-//// y [1, winsize.row]
-const Align = enum {
-	origin,
-	middle,
-	ending,
-
-	fn coord(self: @This(), winsizeVal: u16, val: u16) u16 {
-		return switch(self) {
-			.origin => 1,
-			.middle => @max((winsizeVal -| val) / 2, 1),
-			.ending => @max((winsizeVal + 1) -| val, 1),
-		};
-	}
-};
-
-pub const Alignment = struct {
-	x: Align,
-	y: Align,
-
-	pub fn origin(self: @This(), winsize: std.posix.winsize, x: u16, y: u16) struct{u16, u16} {
-		return .{self.x.coord(winsize.col, x), self.y.coord(winsize.row, y)};
-	}
-};
-
-// T -> TOP, C -> Center, B -> Bottom
-// L -> Left, M -> Middle, R -> Right
-pub const AlignTL = Alignment{.x = .origin, .y = .origin};
-pub const AlignTM = Alignment{.x = .middle, .y = .origin};
-pub const AlignTR = Alignment{.x = .ending, .y = .origin};
-pub const AlignCL = Alignment{.x = .origin, .y = .middle};
-pub const AlignCM = Alignment{.x = .middle, .y = .middle};
-pub const AlignCR = Alignment{.x = .ending, .y = .middle};
-pub const AlignBL = Alignment{.x = .origin, .y = .ending};
-pub const AlignBM = Alignment{.x = .middle, .y = .ending};
-pub const AlignBR = Alignment{.x = .ending, .y = .ending};
-
 pub const StyledText = struct {
 	style: ?Graphics = null,
 	text:  []const u8,
-};
-
-pub fn Menu(comptime Options: type) type {
-	const ti = comptime @typeInfo(Options).@"enum";
-
-	const fields: [ti.fields.len]Options = blk: {
-		var out: [ti.fields.len]Options = undefined;
-		inline for (ti.fields, 0..) |field, i| out[i] = @field(Options, field.name);
-
-		break :blk out;
-	};
-
-	const texts: [ti.fields.len][]const u8 = blk: {
-		const hasTextMethod = std.meta.hasMethod(Options, "text");
-		var out: [ti.fields.len][]const u8 = undefined;
-		inline for (fields, 0..) |field, i| out[i] = if (hasTextMethod) field.text() else @tagName(field);
-
-		break :blk out;
-	};
-
-	const width = blk: {
-		var out: usize = 0;
-		inline for (texts) |text| {
-			if (text.len > out) out = text.len;
-		}
-
-		break :blk out;
-	};
-
-	return struct {
-		selected: usize = 0,
-
-		selStyle: Graphics = .{
-			.fg = .{.type = .rgb, .val = (65 << 16) + (90 << 8) + 119},
-			.bold = .set, .underline = .set,
-		},
-		unselStyle: Graphics = .{
-			.fg = .{.type = .rgb, .val = (35 << 16) + (60 << 8) + 89},
-		},
-
-		alignment: Alignment = AlignCM,
-
-		// TODO handle rerenders
-			// TODO the solution is to have a renderOption fn that has selected bool
-			// TODO call this for the currIndex and then the updated currIndex
-		fn updateSelected(self: *@This(), increment: bool) !void {
-			assert(self.selected < ti.fields.len);
-
-			if (increment) {
-				self.selected += 1;
-				// overflow
-				if (self.selected == fields.len) self.selected = 0;
-			} else {
-				// underflow
-				if (self.selected == 0) self.selected = fields.len;
-				self.selected -= 1;
-			}
-
-			try self.render();
-		}
-
-		pub fn render(self: *@This()) !void {
-			const winsize = try getWindowSize(null);
-			icanonSet(false);
-			echoSet(false);
-			_ = try stdout.write(cursorInvisible);
-			_ = try stdout.write(fullWipe);
-
-			const x, var y = self.alignment.origin(winsize, @truncate(width), fields.len);
-			inline for (0..texts.len) |i| {
-				try moveCursor(x, y);
-				if (self.selected == i) _ = try self.selStyle.write(stdout, texts[i])
-				else _ = try self.unselStyle.write(stdout, texts[i]);
-				
-				y += 1;
-			}
-		}
-
-		pub fn getSelection(self: *@This()) !Options {
-			try self.render();
-
-			while (true) switch (input.awaitInput()) {
-				.escSeq => |v| switch (v) {
-					.moveCursorUp   => try self.updateSelected(false),
-					.moveCursorDown => try self.updateSelected(true),
-					else            => {},
-				},
-				.ascii => |v| if (v == controlKeyEnter) return fields[self.selected],
-				else => {},
-			};
-		}
-	};
-}
-
-// TODO comptime and runtime versions
-pub const Text = struct {
-	const Self = @This();
-
-	const qToReturn: []const u8 = "press q to return";
-
-	styledText: StyledText = .{.text = "lauren gypsum"},
-	winsize:    std.posix.winsize = undefined,
-	alignment:  Alignment = AlignCM,
-
-	pub fn render(self: *@This()) !void {
-		self.winsize = try getWindowSize(null);
-		icanonSet(false);
-		echoSet(false);
-		_ = try stdout.write(fullWipe);
-		_ = try stdout.write(cursorInvisible);
-
-		const height, const width = blk: {
-			var height: u16 = 0;
-			var width: u16 = 0;
-
-			var iter = std.mem.splitScalar(u8, self.styledText.text, '\n');
-			while (iter.next()) |v| {
-				// 1 is subtracted to ensure that at least 1 char will be on the next line
-				const overflow: u16 = @truncate((v.len -| 1) / self.winsize.col);
-				// height is guaranteed to be at least 1 per line, and then an additional per overflow
-				height += 1 + overflow;
-				if (v.len > width) width = @min(self.winsize.col, v.len);
-			}
-
-			if (Self.qToReturn.len > width) width = Self.qToReturn.len;
-
-			break :blk .{height, width};
-		};
-
-		const x, var y = self.alignment.origin(self.winsize, width, height);
-
-		if (self.styledText.style) |style| _ = try style.apply(stdout);
-		var iter = std.mem.splitScalar(u8, self.styledText.text, '\n');
-		while (iter.next()) |v| {
-			var winIter = std.mem.window(u8, v, width, width);
-			while (winIter.next()) |w| {
-				try moveCursor(x, y);
-				_ = try stdout.write(w);
-				y += 1;
-
-				if (y > self.winsize.row) break;
-			}
-
-			if (y > self.winsize.row) break;
-		}
-
-		// reset graphics
-		if (self.styledText.style != null) _ = try stdout.write("\x1b[m");
-		if (y <= self.winsize.row) {
-			try moveCursor(x, y);
-			_ = try stdout.write(qToReturn);
-		}
-	}
-
-	pub fn display(self: *@This()) !void {
-		try self.render();
-
-		while (true) switch (input.awaitInput()) {
-			.ascii => |v| if (v == 'q') return,
-			else => {},
-		};
-	}
 };
 
 pub fn Input(comptime bufSize: usize) type {
@@ -289,31 +90,76 @@ pub fn Input(comptime bufSize: usize) type {
 		buf: [bufSize]u8 = undefined,
 		len: usize = 0,
 
-		alignment: Alignment = AlignTL,
+		// TODO margin
+		alignment: alignment.Alignment = alignment.AlignTL,
 
-		// TODO selective rerender w bool arg for full rerender
-		// TODO needs to handle codepoints when calculating width
-		pub fn render(self: *Self) !void {
-			const winsize = try getWindowSize(null);
+		pub fn sigwinch(self: *Self, bounds: Bounds) !void {
+			return self.render(bounds);
+		}
+
+		// TODO if a char is deleted and it is the last of that line it will need to be cleared
+		pub fn rerender(self: *Self, bounds: Bounds) !void {
+			const boundsWidth = bounds.width();
+
+			const maxWidth: u16 = @truncate(@min(
+				@max(self.prompt.text.len, self.len + 2),
+				boundsWidth,
+			));
+			const alignedBounds = self.alignment.getBounds(bounds, .{maxWidth, 2});
+			const x, var y = alignedBounds.origin();
+			y += 1;
+
+			const alignedWidth = alignedBounds.width();
+
+			// at least 1 line is guaranteed
+			// 2 is added to compensate for "> "
+			// 1 is subtracted to truncate on exact division
+			const lines = 1 + ((self.len + 2 - 1) / alignedWidth);
+
+			_ = try stdout.write(cursorInvisible);
+
+			try stdout.print(
+				cursor.MoveCursorAbs.printFmt ++
+				"\x1b[{d}X",
+				.{y, bounds.x[0], boundsWidth},
+			);
+
+			if (x > 1) try stdout.print("\x1b[{d}C", .{x-1});
+			try stdout.print("> {s}", .{self.buf[0..@min(alignedWidth -| 2, self.len)]});
+
+			for (1..lines) |i| {
+				const offset = (alignedWidth -| 2) + ((i - 1) * alignedWidth);
+				try stdout.print(
+					cursor.MoveCursorAbs.printFmt ++
+					"\x1b[{d}X" ++
+					"{s}",
+					.{y + i, bounds.x[0], boundsWidth, self.buf[offset..@min(offset+alignedWidth, self.len)]},
+				);
+			}
+
+			_ = try stdout.write(cursorVisible);
+		}
+
+		// TODO needs to handle codepoints/graphemes when calculating width
+		pub fn render(self: *Self, bounds: Bounds) !void {
 			icanonSet(false);
 			echoSet(false);
 			_ = try stdout.write(cursorVisible);
 			_ = try stdout.write(fullWipe);
 
-			const x, var y = self.alignment.origin(winsize, @truncate(@max(self.prompt.text.len, self.len + 2)), 2);
+			const alignedBounds = self.alignment.getBounds(bounds, .{@truncate(@max(self.prompt.text.len, self.len + 2)), 2});
+			const x, var y = alignedBounds.origin();
 
 			try moveCursor(x, y);
 			if (self.prompt.style) |style| _ = try style.write(stdout, self.prompt.text)
 			else _ = try stdout.write(self.prompt.text);
 			y += 1;
 
-			try moveCursor(x, y);
-			_ = try stdout.write("> ");
-			if (self.len > 0) _ = try stdout.write(self.buf[0..self.len]);
+			return self.rerender(bounds);
 		}
 
-		pub fn getInput(self: *Self) ![]const u8 {
-			try self.render();
+		pub fn getInput(self: *Self, bounds: Bounds) ![]const u8 {
+			try self.render(bounds);
 
 			while (true) switch (input.awaitInput()) {
 				.ascii => |v| switch (v) {
@@ -324,19 +170,18 @@ pub fn Input(comptime bufSize: usize) type {
 					controlKeyDelete => {
 						// TODO needs to handle codepoints
 						self.len = self.len -| 1;
-						try self.render();
+						try self.rerender(bounds);
 					},
 					else => {
 						self.buf[self.len] = v;
 						self.len += 1;
-						try self.render();
+						try self.rerender(bounds);
 					},
 				},
-				// TODO handle cursor movement?
 				.codePoint => |v| {
-					@memcpy(self.buf[self.len..self.len+v[0]], v[1..1+v[0]]);
-					self.len += v[0];
-					try self.render();
+					@memcpy(self.buf[self.len..self.len+v.len], v.bytes());
+					self.len += v.len;
+					try self.rerender(bounds);
 				},
 				else => {},
 			};
@@ -348,7 +193,7 @@ pub fn Input(comptime bufSize: usize) type {
 
 // TODO progress checklist
 
-// TODO better handling, [16]u8 and just loop
+// TODO better handling and just loop
 // TODO allow for user selected char/codepoint
 const progressBarStr: [1024]u8 = @splat('#');
 
@@ -361,7 +206,7 @@ pub const ProgressBar = struct {
 
 	title: ?StyledText = null,
 	progress: f32 = 0,
-	alignment: Alignment = AlignCM,
+	alignment: alignment.Alignment = alignment.AlignCM,
 
 	pub fn render(self: *@This()) !void {
 		const winsize = try getWindowSize(null);
@@ -413,6 +258,10 @@ pub const ScrollableText = struct {
 	col: u16 = 0,
 
 	precalcOffset: usize = 0,
+
+	pub fn sigwinch(self: *Self, _: Bounds) !void {
+		return self.render();
+	}
 
 	pub fn updateCol(self: *Self, incr: bool) !void {
 		if (incr) self.col +|= 1 else self.col -|= 1;
@@ -500,7 +349,7 @@ pub const ScrollableText = struct {
 					else => {},
 	         },
 	         // home
-	         .moveCursorAbs => |pos| if (pos[0] == 1 and pos[1] == 1) {
+	         .moveCursorAbs => |pos| if (pos.x == 1 and pos.y == 1) {
 					self.col = 0;
 					try self.setRow(0);
 	         },
