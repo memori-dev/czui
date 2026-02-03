@@ -292,3 +292,12 @@ pub const EscSeq = union(enum) {
 		}
 	}
 };
+
+// TODO tests
+//// TODO single int arg
+////// no int passed in should return the default
+////// the first int passed in should return that int
+////// multiple ints passed in should return the first int
+////// incorrect should return what?
+//// TODO multiple int args
+//// TODO no args
